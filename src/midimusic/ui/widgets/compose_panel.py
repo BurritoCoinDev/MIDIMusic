@@ -332,12 +332,22 @@ class ComposePanel(QtWidgets.QWidget):
         request = self.build_request()
         seconds = generator.estimated_seconds(request, self.service.make_context())
         total = seconds * max(1, self.variations.value())
-        unit = f"{total:.0f}s" if total < 90 else f"{total / 60:.1f} min"
-        self.estimate.setText(
-            f"About {unit} for {self.variations.value()} "
-            f"variation{'s' if self.variations.value() > 1 else ''} on "
+        unit = f"{total:.0f}s" if total < 90 else f"{total / 60:.0f} min"
+        count = self.variations.value()
+        text = (
+            f"About {unit} for {count} variation{'s' if count > 1 else ''} on "
             f"{self.service.recommended_compute()}"
         )
+        # A generation measured in tens of minutes is a decision, not a detail.
+        # Say so plainly rather than letting the user find out by waiting.
+        if total > 900:
+            text += "  -  this model is slow without a GPU"
+            self.estimate.setProperty("role", "warn")
+        else:
+            self.estimate.setProperty("role", "dim")
+        self.estimate.style().unpolish(self.estimate)
+        self.estimate.style().polish(self.estimate)
+        self.estimate.setText(text)
 
     # -- data ---------------------------------------------------------------
 

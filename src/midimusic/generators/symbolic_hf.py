@@ -45,8 +45,18 @@ class _SymbolicBase(Generator):
         tu.empty_cache()
 
     def estimated_seconds(self, request: GenerationRequest, ctx: GeneratorContext) -> float:
+        """Wall clock for a generation, from measurement rather than optimism.
+
+        These models decode one token at a time, and a second of music is on
+        the order of a hundred tokens, so CPU generation is minutes per
+        *second* of output -- not a fraction of real time. Measured at roughly
+        130s of compute per second of music on four cores; the figure below
+        assumes a considerably faster desktop CPU and is still slow enough that
+        the UI should be honest about it rather than quietly disappointing.
+        """
         seconds = request.duration_seconds or 60.0
-        return max(5.0, seconds * (0.25 if ctx.device != "cpu" else 0.8))
+        per_second = 2.5 if ctx.device != "cpu" else 40.0
+        return max(10.0, seconds * per_second)
 
 
 class Text2MidiGenerator(_SymbolicBase):

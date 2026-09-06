@@ -52,7 +52,7 @@
         "transformers"
       ],
       "description": "Free-text prompt to MIDI. FLAN-T5 encoder with an autoregressive decoder.",
-      "notes": "CPU inference is documented by the authors. Tens of seconds for a long piece."
+      "notes": "CPU inference is supported by the authors but slow: these models decode a token at a time, so a minute of music is tens of minutes of CPU. Use a GPU for anything interactive."
     },
     {
       "id": "anticipatory-small",
@@ -79,8 +79,8 @@
         "torch",
         "transformers"
       ],
-      "description": "Symbolic generation and infilling. 128M params, comfortable on CPU.",
-      "notes": "Trained on Lakh MIDI (CC-BY 4.0). Good at continuing and filling in existing material."
+      "description": "Symbolic generation and infilling. 128M params, but autoregressive: minutes of compute per minute of music on CPU.",
+      "notes": "Trained on Lakh MIDI (CC-BY 4.0). Good at continuing and filling in existing material. Wants a GPU for interactive use; on CPU expect tens of minutes for a full piece."
     },
     {
       "id": "midi-model-onnx",
@@ -106,7 +106,7 @@
         "onnx"
       ],
       "description": "ONNX symbolic model. Runs entirely on CPU, no torch required.",
-      "notes": "Pin the revision: older ONNX exports are incompatible with current code."
+      "notes": "Pin the revision: older ONNX exports are incompatible with current code. CPU-only by design, and still autoregressive, so long pieces take a while."
     },
     {
       "id": "ace-step-1.5",

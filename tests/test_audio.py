@@ -150,3 +150,45 @@ class TestFallbackSynth:
 
     def test_empty_song_does_not_crash(self):
         assert render_song_fallback(Song(tempo=120)).frames >= 0
+
+
+class TestDependencyHygiene:
+    """Guards against dependencies that break a plain install.
+
+    A core dependency that needs a C compiler turns `pip install` into a build,
+    and the failure lands before any of this code runs. tinysoundfont drags in
+    pyaudio, which has no wheels outside Windows, so it is declared with a
+    platform marker rather than unconditionally.
+    """
+
+    def test_compiler_requiring_deps_are_windows_only(self):
+        import tomllib
+        from pathlib import Path
+
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        core = data["project"]["dependencies"]
+
+        needs_a_compiler_elsewhere = ("tinysoundfont",)
+        for name in needs_a_compiler_elsewhere:
+            matches = [d for d in core if d.startswith(name)]
+            assert matches, f"{name} disappeared from the core dependencies"
+            for dep in matches:
+                assert "sys_platform" in dep, (
+                    f"{name} must carry a platform marker; without one a plain "
+                    "pip install fails on Linux and macOS trying to build pyaudio"
+                )
+
+    def test_the_app_produces_audio_without_a_soundfont_renderer(self, tmp_path, monkeypatch):
+        # The renderer is optional. Losing it must cost quality, not function.
+        from midimusic.audio import render
+
+        monkeypatch.setattr(render, "is_available", lambda: False)
+
+        from midimusic.audio.synth_fallback import render_song_fallback
+        from midimusic.theory.composer import compose
+
+        song = compose("lofi", "D dorian", duration_seconds=10, seed=1)
+        buffer = render_song_fallback(song)
+        path = export_audio(buffer, tmp_path / "fallback.flac", OutputFormat.FLAC)
+        assert path.exists() and path.stat().st_size > 1000

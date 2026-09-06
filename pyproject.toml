@@ -38,11 +38,14 @@ dependencies = [
     # frozen app cannot install packages with its own interpreter, so this is
     # what lets the installer stay self-contained without bundling torch.
     "uv>=0.5",
-    # tinysoundfont declares pyaudio as a hard dependency, but only its live
-    # playback helper needs it; offline rendering does not. Windows wheels
-    # exist for both, and the app degrades to the built-in numpy synth if
-    # either is missing.
-    "tinysoundfont>=0.3.7",
+    # SoundFont rendering. Windows only, on purpose: tinysoundfont declares
+    # pyaudio as a hard dependency for its live-playback helper, which this app
+    # never uses (playback goes through sounddevice, rendering is offline). On
+    # Windows both ship wheels and it installs cleanly; elsewhere pyaudio needs
+    # a compiler and portaudio headers, which would break a plain pip install
+    # for a component we do not even call. Other platforms fall back to the
+    # built-in numpy synth, or opt in with the "soundfont" extra.
+    "tinysoundfont>=0.3.7; sys_platform == 'win32'",
     # Playback. The Windows wheels bundle PortAudio, so there is nothing
     # to install separately; on Linux it needs the system library and the
     # app simply runs without playback.
@@ -60,6 +63,10 @@ transcribe = ["basic-pitch>=0.4"]
 # libsoxr (LGPL-2.1), which would add relinking obligations to a shipped
 # binary, and the built-in windowed-sinc path is good enough without it.
 resample = ["soxr>=0.3"]
+# SoundFont rendering on Linux/macOS. Needs PortAudio development headers
+# present first (apt: portaudio19-dev, brew: portaudio) because it drags in
+# pyaudio, which has no wheels there.
+soundfont = ["tinysoundfont>=0.3.7"]
 dev = [
     "pytest>=8.0",
     "pytest-qt>=4.4",
