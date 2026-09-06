@@ -1,5 +1,7 @@
 # MIDIMusic
 
+[![CI](https://github.com/BurritoCoinDev/MIDIMusic/actions/workflows/ci.yml/badge.svg)](https://github.com/BurritoCoinDev/MIDIMusic/actions/workflows/ci.yml)
+
 A Windows desktop application that generates music locally with open-weight
 models, and exports **MIDI** and **FLAC**. Nothing is uploaded, nothing is
 metered, and it keeps working offline.
