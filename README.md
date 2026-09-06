@@ -201,8 +201,9 @@ same piece.
 
 ## Building the Windows installer
 
-Built locally, not in CI — a `windows-latest` runner bills at 2x minutes and
-the build does not need proving on every push.
+CI builds this on every push to the default branch and uploads it, so the
+quickest way to get a copy is the **Actions** tab → the latest run →
+**MIDIMusic-windows**. To build it yourself:
 
 ```powershell
 cd packaging\windows
@@ -230,8 +231,10 @@ pytest              # the full suite, headless
 ruff check src/     # lint
 ```
 
-CI runs the same two commands on Linux only, on pushes to the default branch
-and on pull requests. It deliberately does no packaging.
+CI runs the suite on Linux and Windows, then builds the Windows bundle,
+verifies it (worker script present as a real file, `uv` bundled, size sane),
+launches the built `.exe` to confirm it does not die on startup, and uploads
+the result as an artifact.
 
 Tests cover the theory engine as music (voice leading really does minimise
 movement; `bVII` in A minor really is G), the audio pipeline (the resampler

@@ -14,11 +14,18 @@ htmlcov/
 .coverage
 coverage.xml
 
-# App runtime data
+# App runtime data. These can contain a Hugging Face token or local paths, so
+# they must never be committed - the repo is public.
 *.log
 /out/
 /models/
 /scratch/
+settings.json
+settings.local.json
+models.user.json
+.env
+*.pem
+*.key
 
 # Packaging
 packaging/windows/build/
@@ -26,9 +33,9 @@ packaging/windows/dist/
 packaging/windows/Output/
 *.spec.bak
 
-# Large binary assets fetched at build/run time
-assets/soundfonts/*.sf2
-assets/soundfonts/*.sf3
+# Large binary assets fetched at build/run time, wherever they land
+*.sf2
+*.sf3
 !assets/soundfonts/README.md
 
 # OS / editor

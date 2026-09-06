@@ -159,18 +159,20 @@ your product's UI.
 
 ---
 
-## CI is deliberately small
+## CI
 
-One Linux job: lint, the test suite, and a headless generation smoke test. It
-runs on pushes to the default branch and on pull requests, not on every branch
-push.
+Two test legs (Linux and Windows, Python 3.12) and a Windows build job.
 
-There is no packaging job. Building the Windows bundle needs a
-`windows-latest` runner, which bills at 2x minutes, and a bundle that CI built
-is not the artifact anyone ships anyway. The checks that job performed —
-worker script present as a real file, `uv` bundled, package imports, bundle
-not bloated by torch — moved into `packaging/windows/build.ps1`, so they still
-run, on the machine that actually does the build.
+The build job is the valuable one, because packaging is the part that cannot
+be verified anywhere else: it asserts that the worker script survived as a real
+file rather than only as bytecode, that `uv` is bundled, and that the bundle
+has not quietly swallowed torch. It then **starts the built executable** and
+checks it is still running twenty-five seconds later, which is how a missing
+hidden import or an absent Qt platform plugin gets caught before a user finds
+it. The bundle and installer are uploaded as artifacts.
+
+`packaging/windows/build.ps1` performs the same checks locally, so a developer
+build is held to the same standard as a CI one.
 
 ## Testing
 

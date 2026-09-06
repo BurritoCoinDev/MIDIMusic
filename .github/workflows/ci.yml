@@ -1,18 +1,8 @@
 name: CI
 
-# Deliberately minimal, to keep Actions usage low.
-#
-# There is no packaging job here on purpose: building the Windows bundle needs
-# a windows-latest runner, which bills at 2x minutes, and the build is not
-# something CI needs to prove on every push. Build locally instead:
-#
-#     cd packaging\windows
-#     .\build.ps1
-#
-# Linux runners bill at 1x, so the suite runs there. It is the same suite: Qt
-# runs headless via the offscreen platform, and nothing under test is
-# Windows-specific except path handling, which is unit-tested rather than
-# needing a Windows runner to observe.
+# The repository is public, so Actions minutes are free and unmetered. The
+# Windows legs are therefore worth running: this is a Windows application, and
+# Windows is the only place the packaging can actually be proven.
 
 on:
   push:
@@ -20,18 +10,20 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Documentation-only changes should not spend minutes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test:
-    name: Test
-    runs-on: ubuntu-latest
-    # Skip runs whose changes cannot affect the result.
-    if: >-
-      !contains(github.event.head_commit.message, '[skip ci]')
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is the shipping target. Linux runs the same suite because it
+        # starts faster, so it usually reports a failure first.
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +34,7 @@ jobs:
           cache: pip
 
       - name: Install Qt runtime dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends \
@@ -56,6 +49,7 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Lint
+        if: runner.os == 'Linux'
         run: ruff check src/ tests/
 
       - name: Test
@@ -66,8 +60,8 @@ jobs:
       - name: Verify the app generates without a display
         env:
           QT_QPA_PLATFORM: offscreen
+        shell: python
         run: |
-          python - <<'PY'
           import time
           from midimusic.core.models import GenerationRequest, OutputFormat
           from midimusic.core.service import AppService
@@ -79,7 +73,7 @@ jobs:
                                 duration_seconds=20, seed=1),
               "builtin-composer",
           )
-          for _ in range(200):
+          for _ in range(400):
               if all(j.is_terminal for j in jobs):
                   break
               time.sleep(0.05)
@@ -88,4 +82,91 @@ jobs:
           assert job.output_paths, "no file written"
           print("generated", job.output_paths[0].name)
           svc.shutdown()
-          PY
+
+  build:
+    name: Build Windows app
+    runs-on: windows-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Build the bundle
+        run: pyinstaller --noconfirm --clean packaging/windows/midimusic.spec
+
+      - name: Verify the bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (-not (Test-Path "dist/MIDIMusic/MIDIMusic.exe")) {
+            throw "the executable was not produced"
+          }
+
+          # The worker is run by a different interpreter, so it has to survive
+          # as a real .py file rather than only as bytecode in the archive.
+          if (-not (Test-Path "dist/MIDIMusic/_internal/midimusic/worker/runner.py")) {
+            throw "worker script was not bundled"
+          }
+
+          # uv builds the compute runtime. Without it the installed app cannot
+          # provision anything, because it has no interpreter of its own.
+          if (-not (Test-Path "dist/MIDIMusic/_internal/uv/uv.exe")) {
+            throw "uv was not bundled - the app would not be self-contained"
+          }
+
+          $mb = (Get-ChildItem -Recurse dist/MIDIMusic | Measure-Object Length -Sum).Sum / 1MB
+          Write-Host ("bundle: {0:N0} MB" -f $mb)
+          if ($mb -gt 900) { throw ("bundle is {0:N0} MB - is torch being pulled in?" -f $mb) }
+
+      - name: Check the built app actually launches
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # Start the real .exe, give it time to build a window, then close it.
+          # A bundle that dies on startup - a missing hidden import, a Qt plugin
+          # that did not come along - fails here rather than in someone's hands.
+          $p = Start-Process -FilePath "dist/MIDIMusic/MIDIMusic.exe" -PassThru
+          Start-Sleep -Seconds 25
+          if ($p.HasExited) {
+            throw "the app exited on startup with code $($p.ExitCode)"
+          }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "app started and stayed running"
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (Test-Path $iscc) {
+            & $iscc "packaging\windows\installer.iss"
+            if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed ($LASTEXITCODE)" }
+          } else {
+            Write-Host "Inno Setup not on this runner; skipping the installer"
+          }
+
+      - name: Upload the app
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIDIMusic-windows
+          path: dist/MIDIMusic/
+          retention-days: 30
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        if: hashFiles('packaging/windows/Output/*.exe') != ''
+        with:
+          name: MIDIMusic-installer
+          path: packaging/windows/Output/*.exe
+          retention-days: 30
