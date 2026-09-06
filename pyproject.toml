@@ -7,6 +7,8 @@ name = "midimusic"
 version = "0.1.0"
 description = "Local, open-weight AI music generation for Windows. Exports MIDI and FLAC."
 readme = "README.md"
+# 3.12 is the sweet spot and what the build targets: AMD's Windows ROCm
+# wheels are cp312-only, and tinysoundfont publishes no cp313+ wheels.
 requires-python = ">=3.10,<3.13"
 license = { text = "MIT" }
 authors = [{ name = "burritocoindev" }]
@@ -34,6 +36,10 @@ dependencies = [
     "pyloudnorm>=0.1.1",
     "mutagen>=1.46",
     "platformdirs>=4.0",
+    # tinysoundfont declares pyaudio as a hard dependency, but only its live
+    # playback helper needs it; offline rendering does not. Windows wheels
+    # exist for both, and the app degrades to the built-in numpy synth if
+    # either is missing.
     "tinysoundfont>=0.3.7",
 ]
 
