@@ -201,13 +201,21 @@ same piece.
 
 ## Building the Windows installer
 
+Built locally, not in CI — a `windows-latest` runner bills at 2x minutes and
+the build does not need proving on every push.
+
 ```powershell
 cd packaging\windows
 .\build.ps1
 ```
 
 Produces a PyInstaller `onedir` bundle and, if Inno Setup is present, an
-installer in `packaging\windows\Output`.
+installer in `packaging\windows\Output`. The script verifies the result
+before it hands it to you: that the worker script survived as a real file,
+that `uv` is bundled, that the package imports, and that the bundle has not
+quietly swallowed torch.
+
+Pass `-SkipInstaller` to build just the application folder.
 
 Unsigned builds trip SmartScreen until they accumulate reputation. Signing
 helps, but note that since March 2024 an EV certificate no longer grants
@@ -221,6 +229,9 @@ instant reputation — OV and EV now accrue it identically.
 pytest              # the full suite, headless
 ruff check src/     # lint
 ```
+
+CI runs the same two commands on Linux only, on pushes to the default branch
+and on pull requests. It deliberately does no packaging.
 
 Tests cover the theory engine as music (voice leading really does minimise
 movement; `bVII` in A minor really is G), the audio pipeline (the resampler

@@ -57,10 +57,30 @@ try {
     $size = (Get-ChildItem -Recurse "dist\MIDIMusic" | Measure-Object -Property Length -Sum).Sum / 1MB
     Write-Host ("Bundle size: {0:N0} MB" -f $size) -ForegroundColor Green
 
-    Write-Host "== Smoke test ==" -ForegroundColor Cyan
-    # Import the package inside the bundle's own environment to catch a missing
-    # hidden import before it reaches a user.
+    Write-Host "== Verifying the bundle ==" -ForegroundColor Cyan
+    # These checks used to live in CI. They run here instead, because building
+    # on a GitHub windows-latest runner costs 2x minutes and the build is not
+    # something every push needs to prove.
+
+    # The worker is executed by a different interpreter, so it has to survive
+    # as a real .py file rather than only as bytecode inside the archive.
+    $worker = "dist\MIDIMusic\_internal\midimusic\worker\runner.py"
+    if (-not (Test-Path $worker)) { throw "worker script was not bundled: $worker" }
+
+    # uv builds the compute runtime. Without it the installed app cannot
+    # provision anything, because it has no interpreter of its own.
+    $uv = "dist\MIDIMusic\_internal\uv\uv.exe"
+    if (-not (Test-Path $uv)) { throw "uv was not bundled - the app would not be self-contained" }
+
+    # A bundle this large means torch has been pulled in, which defeats the
+    # whole point of provisioning it per-GPU after install.
+    if ($size -gt 900) { throw ("bundle is {0:N0} MB - is torch being pulled in?" -f $size) }
+
+    # Catch a missing hidden import before a user does.
     & $py -c "import midimusic, midimusic.ui.main_window, midimusic.core.service; print('imports OK')"
+    if ($LASTEXITCODE -ne 0) { throw "the bundled package failed to import" }
+
+    Write-Host "Bundle checks passed" -ForegroundColor Green
 
     if (-not $SkipInstaller) {
         Write-Host "== Building installer ==" -ForegroundColor Cyan

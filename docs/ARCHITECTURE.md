@@ -159,6 +159,19 @@ your product's UI.
 
 ---
 
+## CI is deliberately small
+
+One Linux job: lint, the test suite, and a headless generation smoke test. It
+runs on pushes to the default branch and on pull requests, not on every branch
+push.
+
+There is no packaging job. Building the Windows bundle needs a
+`windows-latest` runner, which bills at 2x minutes, and a bundle that CI built
+is not the artifact anyone ships anyway. The checks that job performed —
+worker script present as a real file, `uv` bundled, package imports, bundle
+not bloated by torch — moved into `packaging/windows/build.ps1`, so they still
+run, on the machine that actually does the build.
+
 ## Testing
 
 Tests assert musical facts, not just that functions return. Voice leading is
