@@ -16,7 +16,7 @@ from ..core.generator import BackendUnavailable, Capabilities, Generator, Genera
 from ..core.models import GenerationRequest, GenerationResult, Song
 from . import _torch_util as tu
 
-__all__ = ["Text2MidiGenerator", "AnticipatoryGenerator"]
+__all__ = ["AnticipatoryGenerator", "Text2MidiGenerator"]
 
 
 class _SymbolicBase(Generator):

@@ -21,7 +21,7 @@ import sys
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
-__all__ = ["Vendor", "GPU", "SystemInfo", "detect_system", "detect_gpus", "recommended_backend"]
+__all__ = ["GPU", "SystemInfo", "Vendor", "detect_gpus", "detect_system", "recommended_backend"]
 
 
 class Vendor(str, Enum):
@@ -177,13 +177,14 @@ def _detect_windows_dxgi() -> list[GPU]:
             desc = DXGI_ADAPTER_DESC1()
             if get_desc(adapter, byref(desc)) == 0:
                 # Flags bit 0 marks the software (WARP) adapter; skip it.
-                if not (desc.Flags & 0x2):
-                    name = desc.Description.strip()
+                name = desc.Description.strip()
+                vram = int(desc.DedicatedVideoMemory // (1024 * 1024))
+                # Flags bit 1 marks the software (WARP) adapter; a tiny VRAM
+                # figure means an integrated display adapter we cannot use.
+                if not (desc.Flags & 0x2) and vram > 64:
                     vendor = _VENDOR_IDS.get(desc.VendorId, _vendor_from_name(name))
-                    vram = int(desc.DedicatedVideoMemory // (1024 * 1024))
-                    if vram > 64:
-                        gpus.append(GPU(name=name, vendor=vendor, vram_mb=vram,
-                                        gfx_arch=_gfx_for(name)))
+                    gpus.append(GPU(name=name, vendor=vendor, vram_mb=vram,
+                                    gfx_arch=_gfx_for(name)))
             release_proto(a_vtbl[2])(adapter)
             index += 1
         release_proto(vtbl[2])(factory)

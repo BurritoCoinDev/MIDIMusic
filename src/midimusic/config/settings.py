@@ -52,7 +52,7 @@ class Settings:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Settings":
+    def from_dict(cls, data: dict[str, Any]) -> Settings:
         known = {f.name for f in fields(cls)}
         clean = {k: v for k, v in (data or {}).items() if k in known}
         obj = cls(**clean)

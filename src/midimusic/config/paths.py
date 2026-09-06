@@ -11,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-__all__ = ["AppPaths", "get_paths", "set_models_dir", "human_bytes", "disk_free"]
+__all__ = ["AppPaths", "disk_free", "get_paths", "human_bytes", "set_models_dir"]
 
 APP_NAME = "MIDIMusic"
 
@@ -81,7 +81,7 @@ class AppPaths:
         music = Path.home() / "Music"
         return (music if music.exists() else Path.home()) / APP_NAME
 
-    def ensure(self) -> "AppPaths":
+    def ensure(self) -> AppPaths:
         for d in (self.config, self.data, self.cache, self.logs,
                   self.soundfonts, self.models, self.output):
             try:

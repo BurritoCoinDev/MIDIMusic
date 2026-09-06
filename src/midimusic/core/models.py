@@ -15,15 +15,15 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
-    "Note",
-    "Track",
-    "Song",
     "AudioBuffer",
-    "OutputFormat",
-    "JobStatus",
     "GenerationRequest",
     "GenerationResult",
+    "JobStatus",
+    "Note",
+    "OutputFormat",
     "Progress",
+    "Song",
+    "Track",
 ]
 
 
@@ -189,7 +189,7 @@ class GenerationRequest:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "GenerationRequest":
+    def from_dict(cls, d: dict[str, Any]) -> GenerationRequest:
         d = dict(d)
         fmt = d.pop("output_format", "midi")
         req = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})

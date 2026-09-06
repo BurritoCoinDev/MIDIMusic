@@ -12,7 +12,7 @@ import logging
 from .catalog import Catalog, ModelEntry, load_catalog
 from .generator import Generator
 
-__all__ = ["ADAPTERS", "create_generator", "available_generators", "register_adapter"]
+__all__ = ["ADAPTERS", "available_generators", "create_generator", "register_adapter"]
 
 log = logging.getLogger(__name__)
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-__all__ = ["Section", "SongForm", "FORMS", "build_form", "ROLES"]
+__all__ = ["FORMS", "ROLES", "Section", "SongForm", "build_form"]
 
 # Musical roles the arranger can fill.  A style maps each role to a GM program.
 # The core seven carry the song; the rest are enrichment layers that switch on
@@ -34,7 +34,7 @@ class Section:
     transpose: int = 0  # semitones, for last-chorus lifts
     fill_at_end: bool = True
 
-    def with_roles(self, *roles: str) -> "Section":
+    def with_roles(self, *roles: str) -> Section:
         return Section(self.name, self.bars, self.intensity, tuple(roles),
                        self.progression, self.transpose, self.fill_at_end)
 
@@ -132,7 +132,7 @@ FORMS: dict[str, list[Section]] = {
 }
 
 
-def apply_final_lift(sections: list["Section"], semitones: int = 2) -> None:
+def apply_final_lift(sections: list[Section], semitones: int = 2) -> None:
     """Transpose the last occurrence of the most-repeated section.
 
     The final-chorus key change is a cliche because it works: it makes the last

@@ -16,7 +16,7 @@ from typing import Any
 
 from ..config.paths import get_paths
 
-__all__ = ["ModelEntry", "Catalog", "load_catalog", "BUNDLED_CATALOG"]
+__all__ = ["BUNDLED_CATALOG", "Catalog", "ModelEntry", "load_catalog"]
 
 BUNDLED_CATALOG = Path(__file__).resolve().parent.parent / "data" / "models.json"
 
@@ -83,7 +83,7 @@ class ModelEntry:
         return ""
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any], source: str = "bundled") -> "ModelEntry":
+    def from_dict(cls, d: dict[str, Any], source: str = "bundled") -> ModelEntry:
         known = {f.name for f in cls.__dataclass_fields__.values()}
         clean: dict[str, Any] = {}
         for key, value in d.items():

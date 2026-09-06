@@ -9,16 +9,16 @@ from __future__ import annotations
 import numpy as np
 
 __all__ = [
-    "to_stereo",
-    "resample",
-    "peak_normalize",
-    "loudness_normalize",
     "apply_fades",
-    "soft_clip",
-    "trim_silence",
     "dither_to_int",
-    "peak_envelope",
+    "loudness_normalize",
     "measure",
+    "peak_envelope",
+    "peak_normalize",
+    "resample",
+    "soft_clip",
+    "to_stereo",
+    "trim_silence",
 ]
 
 

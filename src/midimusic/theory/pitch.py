@@ -11,16 +11,16 @@ import re
 from dataclasses import dataclass
 
 __all__ = [
-    "NOTE_NAMES",
     "FLAT_NAMES",
-    "prefers_flats",
-    "SCALES",
     "MODE_ALIASES",
+    "NOTE_NAMES",
+    "SCALES",
     "Scale",
-    "note_name",
-    "parse_note",
-    "parse_key",
     "midi_to_freq",
+    "note_name",
+    "parse_key",
+    "parse_note",
+    "prefers_flats",
     "transpose_into_range",
 ]
 
@@ -218,7 +218,7 @@ _FLAT_MAJOR_TONICS = {5, 10, 3, 8, 1, 6}   # F Bb Eb Ab Db Gb
 _FLAT_MINOR_TONICS = {2, 7, 0, 5, 10, 3}   # Dm Gm Cm Fm Bbm Ebm
 
 
-def prefers_flats(scale: "Scale") -> bool:
+def prefers_flats(scale: Scale) -> bool:
     """Whether chords in ``scale`` should be spelled with flats."""
     tonics = _FLAT_MINOR_TONICS if scale.is_minor_ish() else _FLAT_MAJOR_TONICS
     return scale.tonic in tonics

@@ -10,8 +10,9 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
-__all__ = ["Style", "STYLES", "get_style", "load_user_styles", "list_styles"]
+__all__ = ["STYLES", "Style", "get_style", "list_styles", "load_user_styles"]
 
 # General MIDI program numbers, by role, for readability below.
 GM = {
@@ -74,7 +75,9 @@ class Style:
     description: str = ""
 
     # Sensible defaults for the enrichment roles, keyed off the core sounds.
-    _ELECTRONIC_DRUMS = {"house", "techno", "trap", "dnb", "synthwave", "disco"}
+    _ELECTRONIC_DRUMS: ClassVar[set[str]] = {
+        "house", "techno", "trap", "dnb", "synthwave", "disco",
+    }
 
     def program_for(self, role: str) -> int:
         """GM program for any role, deriving the extras when not declared."""
@@ -96,7 +99,7 @@ class Style:
         }
         return derived.get(role, self.programs.get("chords", 0))
 
-    def merged(self, **over) -> "Style":
+    def merged(self, **over) -> Style:
         d = asdict(self)
         d.update({k: v for k, v in over.items() if v is not None})
         return Style(**d)

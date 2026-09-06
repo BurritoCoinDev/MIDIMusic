@@ -16,15 +16,15 @@ import random
 from dataclasses import dataclass, field
 
 __all__ = [
-    "DRUM",
-    "DRUM_PATTERNS",
     "BASS_STYLES",
     "COMP_STYLES",
+    "DRUM",
+    "DRUM_PATTERNS",
     "DrumKit",
-    "parse_steps",
-    "build_drum_bar",
     "build_bass_bar",
     "build_comp_bar",
+    "build_drum_bar",
+    "parse_steps",
 ]
 
 # General MIDI percussion key map (channel 10).

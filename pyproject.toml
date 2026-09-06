@@ -41,6 +41,10 @@ dependencies = [
     # exist for both, and the app degrades to the built-in numpy synth if
     # either is missing.
     "tinysoundfont>=0.3.7",
+    # Playback. The Windows wheels bundle PortAudio, so there is nothing
+    # to install separately; on Linux it needs the system library and the
+    # app simply runs without playback.
+    "sounddevice>=0.4.6",
 ]
 
 [project.optional-dependencies]
@@ -78,7 +82,16 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
-ignore = ["E501", "B008"]
+ignore = [
+    "E501",    # line length is handled by the formatter
+    "B008",    # Qt APIs legitimately call functions in defaults
+    "SIM105",  # try/except/pass reads better than contextlib.suppress here
+    "SIM108",  # ternaries hurt readability in the music-theory branches
+    "B027",    # Generator.load/unload are optional hooks, not abstract
+    "RUF046",  # int() on an already-int is intentional defensive coercion
+    "RUF012",  # dataclass ClassVar noise
+    "UP042",   # str+Enum is deliberate: these serialise straight to JSON
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

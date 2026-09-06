@@ -7,8 +7,6 @@ multi-gigabyte compute runtime installed.
 
 from __future__ import annotations
 
-import time
-
 from ..core.generator import BackendUnavailable, Capabilities, Generator, GeneratorContext
 from ..core.models import GenerationRequest, GenerationResult, Note, Song, Track
 
@@ -89,7 +87,6 @@ class OnnxMidiGenerator(Generator):
         self._session = None
 
     def generate(self, request: GenerationRequest, ctx: GeneratorContext) -> GenerationResult:
-        started = time.time()
         self.load(ctx)
         ctx.check_cancelled()
         ctx.report(0.2, "Generating notes", "generate")

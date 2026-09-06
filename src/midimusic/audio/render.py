@@ -20,7 +20,7 @@ import numpy as np
 
 from ..core.models import AudioBuffer, Song
 
-__all__ = ["RenderOptions", "render_song", "SoundFontRenderer", "is_available"]
+__all__ = ["RenderOptions", "SoundFontRenderer", "is_available", "render_song"]
 
 
 @dataclass

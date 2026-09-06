@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .pitch import FLAT_NAMES, NOTE_NAMES, Scale, prefers_flats, transpose_into_range
+from .pitch import FLAT_NAMES, NOTE_NAMES, Scale, transpose_into_range
 
 __all__ = ["CHORD_QUALITIES", "Chord", "parse_roman", "realize_progression", "voice_lead"]
 
@@ -301,7 +301,7 @@ def _voicing_candidates(ch: Chord, low: int, high: int, voices: int) -> list[lis
                 break
         if len(chosen) == n and len(seen) == len(set(pcs[:n])):
             out.append(chosen)
-    return out or [[p for p in pool[:n]]]
+    return out or [list(pool[:n])]
 
 
 def _movement(a: list[int], b: list[int]) -> float:

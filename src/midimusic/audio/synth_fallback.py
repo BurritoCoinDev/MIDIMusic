@@ -16,7 +16,7 @@ import numpy as np
 from ..core.models import AudioBuffer, Song, Track
 from ..theory.pitch import midi_to_freq
 
-__all__ = ["render_song_fallback", "VOICES"]
+__all__ = ["VOICES", "render_song_fallback"]
 
 
 # Harmonic recipes: (harmonic number, amplitude) plus envelope and character.
@@ -84,7 +84,6 @@ def _voice_for_program(program: int, role: str) -> str:
 def _adsr(n: int, sr: int, spec: dict, sustain_frames: int) -> np.ndarray:
     a = max(1, int(spec["attack"] * sr))
     d = max(1, int(spec["decay"] * sr))
-    r = max(1, int(spec["release"] * sr))
     s_level = float(spec["sustain"])
 
     env = np.zeros(n, dtype=np.float32)

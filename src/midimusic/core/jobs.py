@@ -24,7 +24,7 @@ from queue import Empty, Queue
 from .generator import GenerationCancelled, Generator, GeneratorContext
 from .models import GenerationRequest, GenerationResult, JobStatus, Progress
 
-__all__ = ["Job", "JobQueue", "JobEvent"]
+__all__ = ["Job", "JobEvent", "JobQueue"]
 
 log = logging.getLogger(__name__)
 

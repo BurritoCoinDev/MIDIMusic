@@ -13,13 +13,13 @@ import math
 import random
 
 __all__ = [
-    "swing_offset",
-    "metric_accent",
-    "humanize_time",
-    "humanize_velocity",
-    "humanize_duration",
     "Humanizer",
     "crescendo",
+    "humanize_duration",
+    "humanize_time",
+    "humanize_velocity",
+    "metric_accent",
+    "swing_offset",
 ]
 
 

@@ -11,10 +11,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ..theory.pitch import parse_key
 from ..theory.style import STYLES, list_styles
 
-__all__ = ["ParsedPrompt", "parse_prompt", "MOOD_TERMS", "STYLE_SYNONYMS"]
+__all__ = ["MOOD_TERMS", "STYLE_SYNONYMS", "ParsedPrompt", "parse_prompt"]
 
 # Words that map onto a style when the style name itself is not present.
 STYLE_SYNONYMS: dict[str, str] = {

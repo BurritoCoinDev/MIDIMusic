@@ -8,13 +8,14 @@ useful when it lands in a DAW.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from pathlib import Path
 
 import mido
 
 from ..core.models import Note, Song, Track
 
-__all__ = ["song_to_midi", "write_midi", "read_midi", "midi_to_song"]
+__all__ = ["midi_to_song", "read_midi", "song_to_midi", "write_midi"]
 
 TICKS_PER_BEAT = 480
 
@@ -126,12 +127,12 @@ def _resolve_overlaps(
         prepared.append((n, start, end))
 
     by_pitch: dict[int, list[int]] = {}
-    for idx, (n, start, _end) in enumerate(prepared):
+    for idx, (n, _start, _end) in enumerate(prepared):
         by_pitch.setdefault(int(n.pitch), []).append(idx)
 
     for indices in by_pitch.values():
         indices.sort(key=lambda i: prepared[i][1])
-        for a, b in zip(indices, indices[1:], strict=False):
+        for a, b in pairwise(indices):
             n_a, start_a, end_a = prepared[a]
             start_b = prepared[b][1]
             if end_a > start_b:

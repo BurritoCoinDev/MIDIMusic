@@ -21,10 +21,10 @@ from .humanize import Humanizer
 from .melody import PHRASE_SHAPES, Melodist
 from .pitch import Scale, parse_key, prefers_flats
 from .rhythm import DRUM, DRUM_PATTERNS, build_bass_bar, build_comp_bar, build_drum_bar
-from .structure import CORE_ROLES, Section, apply_final_lift, build_form
+from .structure import Section, apply_final_lift, build_form
 from .style import Style, get_style
 
-__all__ = ["CompositionSpec", "Composer", "compose"]
+__all__ = ["Composer", "CompositionSpec", "compose"]
 
 STEPS_PER_BAR = 16
 

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from .chords import Chord
 from .pitch import Scale
 
-__all__ = ["Motif", "Melodist", "PHRASE_SHAPES"]
+__all__ = ["PHRASE_SHAPES", "Melodist", "Motif"]
 
 # Rhythmic cells on a 16th grid, as (step, length_in_steps) pairs for one bar.
 _RHYTHM_CELLS: list[list[tuple[int, int]]] = [
@@ -52,24 +52,28 @@ class Motif:
     degrees: list[int]                 # offsets in scale steps from an anchor
     anchor: int = 0                    # scale-degree anchor
 
-    def transposed(self, delta: int) -> "Motif":
+    def transposed(self, delta: int) -> Motif:
         return Motif(list(self.rhythm), [d + delta for d in self.degrees], self.anchor)
 
-    def inverted(self) -> "Motif":
+    def inverted(self) -> Motif:
         if not self.degrees:
             return self
         pivot = self.degrees[0]
         return Motif(list(self.rhythm), [2 * pivot - d for d in self.degrees], self.anchor)
 
-    def retrograde(self) -> "Motif":
+    def retrograde(self) -> Motif:
         return Motif(list(self.rhythm), list(reversed(self.degrees)), self.anchor)
 
-    def augmented(self, steps_per_bar: int = 16) -> "Motif":
+    def augmented(self, steps_per_bar: int = 16) -> Motif:
         """Stretch the rhythm to twice the length, clipped to the bar."""
-        out = [(s * 2, min(l * 2, steps_per_bar)) for s, l in self.rhythm if s * 2 < steps_per_bar]
+        out = [
+            (step * 2, min(length * 2, steps_per_bar))
+            for step, length in self.rhythm
+            if step * 2 < steps_per_bar
+        ]
         return Motif(out or list(self.rhythm), list(self.degrees), self.anchor)
 
-    def sparser(self, keep: float, rng: random.Random) -> "Motif":
+    def sparser(self, keep: float, rng: random.Random) -> Motif:
         """Thin the motif out, always keeping the first note."""
         if len(self.rhythm) <= 1:
             return self

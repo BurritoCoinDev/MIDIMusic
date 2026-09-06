@@ -18,7 +18,7 @@ import numpy as np
 from ..core.models import AudioBuffer, Song
 from .midi_io import midi_to_song
 
-__all__ = ["transcribe_audio", "transcribe_file", "is_available"]
+__all__ = ["is_available", "transcribe_audio", "transcribe_file"]
 
 log = logging.getLogger(__name__)
 
