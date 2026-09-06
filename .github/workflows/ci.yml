@@ -6,7 +6,11 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    # Feature branches are included while the repository is public and minutes
+    # are free, so packaging is exercised before anything reaches main. Trim
+    # this back to [main, master] if the repository goes private again --
+    # windows-latest bills at 2x, and the build job is the expensive one.
+    branches: [main, master, "claude/**"]
   pull_request:
   workflow_dispatch:
 
