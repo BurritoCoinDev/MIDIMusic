@@ -309,8 +309,13 @@ class ModelsPanel(QtWidgets.QWidget):
 
     @QtCore.Slot(str)
     def _on_install_finished(self, error: str) -> None:
+        from ...core.worker_client import clear_probe_cache
+
         self.install_button.setText("Install")
         self._install = None
+        # The runtime changed, so every cached capability answer is stale.
+        clear_probe_cache()
+        self.refresh()
         self._append_log(f"\nFailed: {error}" if error else "\nDone. Restart to use the new runtime.")
 
     # -- catalog ------------------------------------------------------------

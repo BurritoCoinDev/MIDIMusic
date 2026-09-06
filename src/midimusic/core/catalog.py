@@ -64,12 +64,21 @@ class ModelEntry:
         return output_format in self.outputs
 
     def runs_on(self, device: str) -> bool:
+        """Whether a machine with this compute backend can run the model.
+
+        A CPU-capable model runs on every machine, so having a GPU must never
+        make it unavailable -- the question is what the machine can do, not
+        which device the model prefers.
+        """
         if device in ("auto", ""):
             return True
-        # ROCm and CUDA both present as "cuda" to torch, so treat them alike
-        # for capability purposes.
-        alias = {"rocm-windows": "rocm", "cuda": "cuda", "rocm": "rocm"}
-        return alias.get(device, device) in self.devices or device in self.devices
+        if "cpu" in self.devices:
+            return True
+        # ROCm presents itself through the CUDA API, so a model that declares
+        # either runs on a machine offering the other.
+        alias = {"rocm-windows": "rocm", "rocm-linux": "rocm"}
+        resolved = alias.get(device, device)
+        return resolved in self.devices or device in self.devices
 
     def fits(self, vram_gb: float) -> bool:
         return self.vram_gb <= 0 or vram_gb <= 0 or vram_gb >= self.vram_gb

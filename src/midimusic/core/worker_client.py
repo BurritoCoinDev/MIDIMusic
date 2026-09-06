@@ -22,6 +22,7 @@ from ..config.paths import get_paths
 __all__ = [
     "WorkerCancelled",
     "WorkerError",
+    "clear_probe_cache",
     "probe_runtime",
     "run_worker",
     "runtime_python",
@@ -91,19 +92,44 @@ class WorkerResult:
     meta: dict
 
 
-def probe_runtime(runtime_dir: Path | None = None, timeout: float = 60.0) -> dict:
-    """Ask the runtime what it has installed. Returns {} when unavailable."""
+# Probing starts a subprocess that imports torch, which takes seconds. The UI
+# asks whether a backend is ready for every model card it draws, so the answer
+# is cached: without this the Models tab would spawn a dozen interpreters and
+# take the better part of a minute to open.
+_PROBE_CACHE: dict[str, dict] = {}
+_PROBE_LOCK = threading.Lock()
+
+
+def probe_runtime(
+    runtime_dir: Path | None = None,
+    timeout: float = 60.0,
+    refresh: bool = False,
+) -> dict:
+    """Ask the runtime what it has installed. Returns {} when unavailable.
+
+    Cached after the first call; pass ``refresh`` after installing a runtime.
+    """
     python = runtime_python(runtime_dir)
     if python is None:
         return {}
+    key = str(python)
+    with _PROBE_LOCK:
+        if not refresh and key in _PROBE_CACHE:
+            return _PROBE_CACHE[key]
     try:
-        result = run_worker(
-            {"cmd": "probe"}, python=python, timeout=timeout,
-        )
-        return result.meta
+        meta = run_worker({"cmd": "probe"}, python=python, timeout=timeout).meta
     except Exception as exc:
         log.info("runtime probe failed: %s", exc)
-        return {}
+        meta = {}
+    with _PROBE_LOCK:
+        _PROBE_CACHE[key] = meta
+    return meta
+
+
+def clear_probe_cache() -> None:
+    """Forget cached probes, so the next call re-measures the runtime."""
+    with _PROBE_LOCK:
+        _PROBE_CACHE.clear()
 
 
 def run_worker(
