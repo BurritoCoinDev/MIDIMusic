@@ -108,6 +108,11 @@ jobs:
           if (-not (Test-Path "dist/MIDIMusic/_internal/midimusic/worker/runner.py")) {
             throw "worker script was not bundled"
           }
+          # uv is what builds the compute runtime. Without it the packaged app
+          # cannot provision anything, because it has no interpreter of its own.
+          if (-not (Test-Path "dist/MIDIMusic/_internal/uv/uv.exe")) {
+            throw "uv was not bundled - the app would not be self-contained"
+          }
           $mb = (Get-ChildItem -Recurse dist/MIDIMusic | Measure-Object Length -Sum).Sum / 1MB
           Write-Host ("bundle: {0:N0} MB" -f $mb)
           if ($mb -gt 900) { throw "bundle unexpectedly large - is torch being pulled in?" }

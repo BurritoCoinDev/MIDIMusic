@@ -34,6 +34,10 @@ dependencies = [
     "pretty_midi>=0.2.10",
     "pyloudnorm>=0.1.1",
     "platformdirs>=4.0",
+    # Builds the separate Python environment that neural backends run in. A
+    # frozen app cannot install packages with its own interpreter, so this is
+    # what lets the installer stay self-contained without bundling torch.
+    "uv>=0.5",
     # tinysoundfont declares pyaudio as a hard dependency, but only its live
     # playback helper needs it; offline rendering does not. Windows wheels
     # exist for both, and the app degrades to the built-in numpy synth if

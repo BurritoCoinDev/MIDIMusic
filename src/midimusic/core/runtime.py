@@ -18,6 +18,7 @@ import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 __all__ = ["RUNTIME_OPTIONS", "InstallHandle", "RuntimeOption", "install_runtime", "options_for"]
 
@@ -168,7 +169,6 @@ def install_runtime(
 ) -> InstallHandle:
     """Install a torch build in the background, streaming pip output."""
     handle = InstallHandle(option=option)
-    executable = python_executable or sys.executable
 
     def emit(line: str) -> None:
         handle.lines.append(line)
@@ -178,57 +178,60 @@ def install_runtime(
             except Exception:
                 log.exception("install output callback failed")
 
+    def _stream(process) -> int:
+        for line in process.stdout or []:
+            if handle._cancel.is_set():
+                process.terminate()
+                break
+            emit(line.rstrip())
+        return process.wait()
+
     def run() -> None:
         try:
+            from .bootstrap import create_runtime, uv_pip_install
+
+            # A packaged application has no interpreter of its own to install
+            # into -- sys.executable is MIDIMusic.exe -- so the environment has
+            # to be built before anything can be installed into it. This is a
+            # no-op once it exists.
+            if python_executable:
+                target = Path(python_executable)
+            else:
+                emit("Preparing the Python environment")
+                target = create_runtime(on_line=emit)
+            emit(f"Using {target}")
+
             # Some builds fail at import time when an incompatible package is
-            # installed alongside them, so clear those first.
+            # present alongside them, so clear those first.
             for package in option.incompatible:
                 emit(f"Removing incompatible package: {package}")
                 subprocess.run(
-                    [executable, "-m", "pip", "uninstall", "-y", package],
+                    [str(target), "-m", "pip", "uninstall", "-y", package],
                     capture_output=True, text=True, timeout=300,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
 
-            packages = resolve_packages(option, gfx_arch)
-            cmd = [executable, "-m", "pip", "install", "--upgrade", *packages]
-            if option.index_url:
-                cmd += ["--index-url", option.index_url]
-                # Everything not on the vendor index still has to resolve.
-                # Note this must be --extra-index-url, not a second
-                # --index-url: pip would otherwise prefer PyPI and silently
-                # install a CUDA build over the one we asked for.
-                cmd += ["--extra-index-url", "https://pypi.org/simple"]
-            cmd += list(option.extra_args)
-            emit("$ " + " ".join(cmd))
-
-            handle._process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            packages = list(resolve_packages(option, gfx_arch)) + list(option.extra_args)
+            handle._process = uv_pip_install(
+                packages, target, index_url=option.index_url, on_line=emit,
             )
-            for line in handle._process.stdout or []:
-                if handle._cancel.is_set():
-                    break
-                emit(line.rstrip())
-            handle.returncode = handle._process.wait()
+            if handle._process is None:
+                raise RuntimeError("The environment builder is unavailable.")
+            handle.returncode = _stream(handle._process)
 
             # Application libraries come from PyPI, after torch, so the vendor
             # index never has to satisfy them.
             if handle.returncode == 0 and extra_packages and not handle._cancel.is_set():
-                emit("\nInstalling model libraries")
-                follow_up = subprocess.run(
-                    [executable, "-m", "pip", "install", "--upgrade", *extra_packages],
-                    capture_output=True, text=True, timeout=1800,
-                )
-                for line in (follow_up.stdout or "").splitlines()[-20:]:
-                    emit(line)
-                if follow_up.returncode != 0:
-                    handle.returncode = follow_up.returncode
-                    emit((follow_up.stderr or "")[-2000:])
+                emit("")
+                emit("Installing model libraries")
+                handle._process = uv_pip_install(list(extra_packages), target, on_line=emit)
+                if handle._process is not None:
+                    handle.returncode = _stream(handle._process)
+
             if handle._cancel.is_set():
                 handle.error = "Cancelled"
             elif handle.returncode != 0:
-                handle.error = f"pip exited with code {handle.returncode}"
+                handle.error = f"Installation failed with code {handle.returncode}"
         except Exception as exc:
             handle.error = f"{type(exc).__name__}: {exc}"
             log.exception("runtime install failed")

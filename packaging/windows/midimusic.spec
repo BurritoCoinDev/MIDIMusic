@@ -7,8 +7,13 @@
 #
 # Torch is intentionally NOT bundled. The correct build depends on the user's
 # GPU (AMD's Windows ROCm wheels, CUDA, or CPU), so the app installs it after
-# setup from the Models tab. That keeps the installer around 120 MB instead of
+# setup from the Models tab. That keeps the installer around 140 MB instead of
 # several gigabytes and means an AMD user gets a working GPU path.
+#
+# What IS bundled is uv, the tool that builds that environment. A frozen app
+# cannot install packages with its own interpreter -- sys.executable is
+# MIDIMusic.exe -- so without uv there would be no way to provision anything,
+# and the app would depend on the user already having Python installed.
 
 import sys
 from pathlib import Path
@@ -28,8 +33,25 @@ assets = ROOT / "src" / "midimusic" / "assets"
 if assets.exists():
     datas.append((str(assets), "midimusic/assets"))
 
+# uv builds the compute runtime. Bundling it is what keeps the app
+# self-contained: everything needed to bootstrap ships in the installer, and
+# only the multi-gigabyte GPU wheels are fetched on demand.
+try:
+    import uv as _uv_package
+
+    _uv_binary = Path(_uv_package.find_uv_bin())
+    if _uv_binary.exists():
+        binaries_extra = [(str(_uv_binary), "uv")]
+    else:
+        raise FileNotFoundError(_uv_binary)
+except Exception as exc:  # pragma: no cover - build-time only
+    raise SystemExit(
+        "uv is required to build a self-contained bundle: pip install uv"
+    ) from exc
+
 # soundfile and sounddevice carry the native libraries we depend on.
 binaries = collect_dynamic_libs("soundfile") + collect_dynamic_libs("sounddevice")
+binaries += binaries_extra
 datas += collect_data_files("soundfile") + collect_data_files("tinysoundfont")
 
 hiddenimports = [

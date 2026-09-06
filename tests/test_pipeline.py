@@ -275,3 +275,62 @@ def _wait(jobs, limit: int = 200) -> None:
         if all(j.is_terminal for j in jobs):
             return
         time.sleep(0.05)
+
+
+class TestBootstrap:
+    """The packaged app must be able to build its own Python environment.
+
+    Without this it would silently depend on the user already having Python
+    installed, which defeats the point of shipping an installer.
+    """
+
+    def test_a_bootstrapper_is_available(self):
+        from midimusic.core.bootstrap import find_uv
+
+        assert find_uv() is not None, "no environment builder found"
+
+    def test_it_creates_a_working_interpreter(self, tmp_path):
+        import subprocess
+
+        from midimusic.core.bootstrap import create_runtime, runtime_exists
+
+        target = tmp_path / "runtime"
+        assert not runtime_exists(target)
+        python = create_runtime(target)
+        assert runtime_exists(target)
+        version = subprocess.run([str(python), "--version"],
+                                 capture_output=True, text=True).stdout
+        assert "3.12" in version
+
+    def test_creating_twice_is_a_no_op(self, tmp_path):
+        from midimusic.core.bootstrap import create_runtime
+
+        target = tmp_path / "runtime"
+        assert create_runtime(target) == create_runtime(target)
+
+    def test_the_installer_builds_an_environment_rather_than_using_the_app(self):
+        # In a frozen build sys.executable is MIDIMusic.exe, so an installer
+        # that shelled out to it would relaunch the GUI instead of installing
+        # anything. It must provision a real interpreter first.
+        from midimusic.core import bootstrap as bootstrap_module
+        from midimusic.core.runtime import RUNTIME_OPTIONS, install_runtime
+
+        called: dict = {}
+
+        def fake_create_runtime(*_args, **kwargs):
+            called["created"] = True
+            on_line = kwargs.get("on_line")
+            if on_line:
+                on_line("stub")
+            raise RuntimeError("stop here; provisioning was reached")
+
+        original = bootstrap_module.create_runtime
+        bootstrap_module.create_runtime = fake_create_runtime
+        try:
+            option = next(o for o in RUNTIME_OPTIONS if o.id == "cpu")
+            handle = install_runtime(option, extra_packages=())
+            handle.thread.join(30)
+        finally:
+            bootstrap_module.create_runtime = original
+
+        assert called.get("created"), "install did not provision an interpreter"

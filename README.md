@@ -120,9 +120,18 @@ runtime, driven over a small JSON protocol. Three reasons:
 ### From the installer
 
 Download the latest `MIDIMusic-x.y.z-Setup.exe` from Releases and run it. It
-installs per-user, so there is no administrator prompt. Then open **Models**
-and install a compute runtime if you want to use neural models — the built-in
-composer works immediately either way.
+installs per-user, so there is no administrator prompt.
+
+**You do not need Python installed.** The installer carries its own Python
+runtime, Qt, the audio libraries, and `uv` — everything needed to run the app
+and to build the separate environment that neural models use. There is no
+prerequisite, no PATH surgery, and no "install Python 3.12 first".
+
+What the installer does *not* carry is PyTorch (about 4 GB, and which build is
+correct depends on your GPU) or model weights (2–9 GB each). Those are fetched
+on demand from the **Models** tab, which builds the environment for you. The
+built-in composer needs none of it and works the moment the installer finishes,
+offline.
 
 ### From source
 
@@ -156,6 +165,22 @@ carries, and your compute runtime.
 
 **Settings** — output folder, model folder (movable to another drive), sample
 rate, bit depth, loudness target, and a Hugging Face token for gated models.
+
+---
+
+## What is bundled versus fetched
+
+| | Where it lives |
+|---|---|
+| The app, Qt, Python runtime, audio libraries | In the installer (~140 MB) |
+| `uv`, which builds the model environment | In the installer |
+| Built-in composer | In the installer — works offline, immediately |
+| PyTorch for your GPU (~4 GB) | Fetched on request, into a separate environment |
+| Model weights (2–9 GB each) | Fetched on request, licence shown first |
+| SoundFont for nicer MIDI playback (38 MB) | Optional, offered in Settings |
+
+The split is deliberate: bundling every GPU variant of PyTorch would make a
+multi-gigabyte installer that is wrong for most people who download it.
 
 ---
 
