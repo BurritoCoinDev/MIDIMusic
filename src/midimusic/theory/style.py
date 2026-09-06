@@ -64,10 +64,37 @@ class Style:
     melody_density: float = 0.55   # fraction of available steps used
     melody_range: tuple[int, int] = (60, 84)
     melody_leapiness: float = 0.3  # 0 = stepwise, 1 = arpeggiated leaps
+    # Instruments for the enrichment layers.  Left empty, they are derived
+    # from the core programs, so a new style only has to declare what differs.
+    ensemble: dict[str, int] = field(default_factory=dict)
+    extensions: bool = False  # allow 9ths/13ths in voicings
     chord_octave: int = 3
     bass_octave: int = 2
     beats_per_bar: int = 4
     description: str = ""
+
+    # Sensible defaults for the enrichment roles, keyed off the core sounds.
+    _ELECTRONIC_DRUMS = {"house", "techno", "trap", "dnb", "synthwave", "disco"}
+
+    def program_for(self, role: str) -> int:
+        """GM program for any role, deriving the extras when not declared."""
+        if role in self.ensemble:
+            return self.ensemble[role]
+        if role in self.programs:
+            return self.programs[role]
+        electronic = self.drums in self._ELECTRONIC_DRUMS
+        derived = {
+            # A second comping voice should contrast with the first.
+            "chords2": GM["clean_guitar"] if not electronic else GM["e_piano"],
+            "sub": GM["synth_bass2"] if electronic else self.programs.get("bass", 33),
+            "strings": GM["synth_strings"] if electronic else GM["strings"],
+            "brass": GM["synth_brass"] if electronic else GM["brass"],
+            # Doubling the lead an octave up wants a thinner sound than the lead.
+            "lead2": self.programs.get("lead", 81),
+            "texture": GM["atmosphere"] if electronic else GM["halo_pad"],
+            "perc": 0,  # percussion is on the drum channel
+        }
+        return derived.get(role, self.programs.get("chords", 0))
 
     def merged(self, **over) -> "Style":
         d = asdict(self)
@@ -119,7 +146,7 @@ STYLES: dict[str, Style] = {
                   "arp": GM["clean_guitar"], "counter": GM["organ"]},
         description="Fast, loud, three chords."),
 
-    "funk": _st("funk", tempo=(96, 116), scales=("dorian", "minor_pentatonic", "mixolydian"),
+    "funk": _st("funk", extensions=True, tempo=(96, 116), scales=("dorian", "minor_pentatonic", "mixolydian"),
         progressions=(("i7", "i7", "IV7", "i7"), ("i7", "bVII", "i7", "i7"),
                       ("i7", "iv7", "i7", "V7")),
         drums="funk", bass="funk", comp="stabs", form="verse_chorus",
@@ -129,7 +156,7 @@ STYLES: dict[str, Style] = {
                   "arp": GM["muted_guitar"], "counter": GM["brass"]},
         melody_leapiness=0.45, description="Syncopated, one-chord vamps."),
 
-    "jazz": _st("jazz", tempo=(110, 160), scales=("major", "dorian", "melodic_minor"),
+    "jazz": _st("jazz", extensions=True, tempo=(110, 160), scales=("major", "dorian", "melodic_minor"),
         progressions=(("ii7", "V7", "Imaj7", "Imaj7"), ("Imaj7", "vi7", "ii7", "V7"),
                       ("iii7", "vi7", "ii7", "V7"), ("Imaj7", "bIII7", "ii7", "V7")),
         drums="jazz", bass="walking", comp="charleston", form="aaba",
@@ -168,7 +195,7 @@ STYLES: dict[str, Style] = {
                   "arp": GM["music_box"], "counter": GM["choir"]},
         melody_density=0.35, bass_octave=1, description="808s, hi-hat rolls."),
 
-    "lofi": _st("lofi", tempo=(70, 88), scales=("dorian", "major", "minor"),
+    "lofi": _st("lofi", extensions=True, tempo=(70, 88), scales=("dorian", "major", "minor"),
         progressions=(("ii7", "V7", "Imaj7", "vi7"), ("Imaj7", "vi7", "ii7", "V7"),
                       ("i7", "iv7", "bVII", "bIII")),
         drums="lofi", bass="roots", comp="half", form="loop",
@@ -178,7 +205,7 @@ STYLES: dict[str, Style] = {
                   "arp": GM["music_box"], "counter": GM["nylon_guitar"]},
         melody_density=0.35, description="Warm, hazy, jazzy loops."),
 
-    "house": _st("house", tempo=(120, 128), scales=("minor", "dorian", "major"),
+    "house": _st("house", extensions=True, tempo=(120, 128), scales=("minor", "dorian", "major"),
         progressions=(("i7", "iv7", "bVII", "bIII"), ("i", "bVI", "bIII", "bVII"),
                       ("ii7", "V7", "Imaj7", "Imaj7")),
         drums="house", bass="house", comp="offbeat", form="electronic",
@@ -216,7 +243,7 @@ STYLES: dict[str, Style] = {
                   "arp": GM["square_lead"], "counter": GM["synth_brass"]},
         description="Neon, 80s, arpeggiated."),
 
-    "disco": _st("disco", tempo=(112, 126), scales=("major", "dorian", "minor"),
+    "disco": _st("disco", extensions=True, tempo=(112, 126), scales=("major", "dorian", "minor"),
         progressions=(("i7", "iv7", "bVII", "bIII"), ("Imaj7", "vi7", "ii7", "V7")),
         drums="disco", bass="octaves", comp="offbeat", form="verse_chorus",
         sevenths=True, humanize=0.35,
@@ -252,7 +279,7 @@ STYLES: dict[str, Style] = {
                   "arp": GM["nylon_guitar"], "counter": GM["violin"]},
         description="Fingerpicked, modal, acoustic."),
 
-    "bossa": _st("bossa", tempo=(120, 140), scales=("major", "dorian", "melodic_minor"),
+    "bossa": _st("bossa", extensions=True, tempo=(120, 140), scales=("major", "dorian", "melodic_minor"),
         progressions=(("Imaj7", "ii7", "V7", "Imaj7"), ("ii7", "V7", "Imaj7", "vi7")),
         drums="bossa", bass="root_fifth", comp="charleston", form="aaba",
         sevenths=True, humanize=0.55,
@@ -270,7 +297,7 @@ STYLES: dict[str, Style] = {
                   "arp": GM["nylon_guitar"], "counter": GM["brass"]},
         description="Clave-driven, Spanish cadence."),
 
-    "ambient": _st("ambient", tempo=(60, 80), scales=("lydian", "major", "dorian"),
+    "ambient": _st("ambient", extensions=True, tempo=(60, 80), scales=("lydian", "major", "dorian"),
         progressions=(("Imaj7", "IVmaj7", "Imaj7", "vi7"), ("Imaj7", "iii7", "IVmaj7", "Imaj7")),
         drums="ambient", bass="pedal", comp="pad", form="ambient",
         sevenths=True, humanize=0.9,

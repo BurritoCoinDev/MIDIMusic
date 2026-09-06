@@ -14,7 +14,12 @@ from dataclasses import dataclass, field
 __all__ = ["Section", "SongForm", "FORMS", "build_form", "ROLES"]
 
 # Musical roles the arranger can fill.  A style maps each role to a GM program.
-ROLES = ("drums", "bass", "chords", "lead", "pad", "arp", "counter")
+# The core seven carry the song; the rest are enrichment layers that switch on
+# as the complexity setting rises, so a dense mix is arrangement rather than
+# the same four parts played louder.
+CORE_ROLES = ("drums", "bass", "chords", "lead", "pad", "arp", "counter")
+EXTRA_ROLES = ("perc", "sub", "chords2", "strings", "lead2", "brass", "texture")
+ROLES = CORE_ROLES + EXTRA_ROLES
 
 
 @dataclass
@@ -56,23 +61,31 @@ def _s(name: str, bars: int, intensity: float, *roles: str) -> Section:
 # stretches or trims them to hit a requested duration.
 FORMS: dict[str, list[Section]] = {
     "pop": [
-        _s("intro", 4, 0.45, "drums", "chords", "pad"),
-        _s("verse", 8, 0.6, "drums", "bass", "chords", "pad"),
-        _s("prechorus", 4, 0.75, "drums", "bass", "chords", "arp"),
-        _s("chorus", 8, 1.0, "drums", "bass", "chords", "lead", "pad"),
-        _s("verse", 8, 0.65, "drums", "bass", "chords", "arp"),
-        _s("chorus", 8, 1.0, "drums", "bass", "chords", "lead", "pad"),
-        _s("bridge", 4, 0.5, "chords", "pad", "lead"),
-        _s("chorus", 8, 1.0, "drums", "bass", "chords", "lead", "pad"),
-        _s("outro", 4, 0.5, "chords", "pad"),
+        _s("intro", 4, 0.45, "drums", "chords", "pad", "texture"),
+        _s("verse", 8, 0.6, "drums", "bass", "chords", "pad", "perc"),
+        _s("prechorus", 4, 0.75, "drums", "bass", "chords", "arp", "strings"),
+        _s("chorus", 8, 1.0, "drums", "bass", "chords", "lead", "pad",
+           "lead2", "strings", "perc", "sub"),
+        _s("verse", 8, 0.65, "drums", "bass", "chords", "arp", "perc", "counter"),
+        _s("chorus", 8, 1.0, "drums", "bass", "chords", "lead", "pad",
+           "lead2", "strings", "perc", "sub"),
+        _s("bridge", 8, 0.5, "chords", "pad", "lead", "strings", "texture"),
+        _s("chorus", 8, 1.0, "drums", "bass", "chords", "chords2", "lead", "pad",
+           "lead2", "strings", "perc", "sub", "brass"),
+        _s("outro", 4, 0.5, "chords", "pad", "texture"),
     ],
     "verse_chorus": [
-        _s("intro", 4, 0.5, "drums", "chords"),
-        _s("verse", 8, 0.65, "drums", "bass", "chords"),
-        _s("chorus", 8, 1.0, "drums", "bass", "chords", "lead"),
-        _s("verse", 8, 0.7, "drums", "bass", "chords", "arp"),
-        _s("chorus", 8, 1.0, "drums", "bass", "chords", "lead"),
-        _s("outro", 4, 0.5, "chords", "pad"),
+        _s("intro", 4, 0.5, "drums", "chords", "texture"),
+        _s("verse", 8, 0.65, "drums", "bass", "chords", "perc"),
+        _s("chorus", 8, 1.0, "drums", "bass", "chords", "lead", "pad",
+           "strings", "lead2", "sub"),
+        _s("verse", 8, 0.7, "drums", "bass", "chords", "arp", "perc", "counter"),
+        _s("chorus", 8, 1.0, "drums", "bass", "chords", "chords2", "lead", "pad",
+           "strings", "lead2", "sub", "brass"),
+        _s("solo", 8, 0.9, "drums", "bass", "chords", "lead", "perc"),
+        _s("chorus", 8, 1.0, "drums", "bass", "chords", "chords2", "lead", "pad",
+           "strings", "lead2", "sub", "brass"),
+        _s("outro", 4, 0.5, "chords", "pad", "texture"),
     ],
     "aaba": [
         _s("A", 8, 0.7),
@@ -81,38 +94,63 @@ FORMS: dict[str, list[Section]] = {
         _s("A", 8, 0.8),
     ],
     "twelve_bar": [
-        _s("head", 12, 0.7),
-        _s("solo", 12, 0.9, "drums", "bass", "chords", "lead"),
-        _s("solo", 12, 1.0, "drums", "bass", "chords", "lead"),
-        _s("head", 12, 0.8),
+        _s("head", 12, 0.7, "drums", "bass", "chords", "lead", "counter"),
+        _s("solo", 12, 0.9, "drums", "bass", "chords", "lead", "perc"),
+        _s("solo", 12, 1.0, "drums", "bass", "chords", "lead", "brass", "perc"),
+        _s("head", 12, 0.8, "drums", "bass", "chords", "lead", "counter", "brass"),
     ],
     "electronic": [
-        _s("intro", 8, 0.35, "drums", "pad"),
-        _s("build", 8, 0.6, "drums", "bass", "arp", "pad"),
-        _s("drop", 16, 1.0, "drums", "bass", "chords", "lead", "arp"),
-        _s("breakdown", 8, 0.4, "pad", "chords"),
-        _s("build", 8, 0.7, "drums", "bass", "arp"),
-        _s("drop", 16, 1.0, "drums", "bass", "chords", "lead", "arp"),
-        _s("outro", 8, 0.4, "drums", "pad"),
+        _s("intro", 8, 0.35, "drums", "pad", "texture"),
+        _s("build", 8, 0.6, "drums", "bass", "arp", "pad", "perc"),
+        _s("drop", 16, 1.0, "drums", "bass", "chords", "lead", "arp",
+           "sub", "perc", "lead2", "strings"),
+        _s("breakdown", 8, 0.4, "pad", "chords", "texture", "counter"),
+        _s("build", 8, 0.7, "drums", "bass", "arp", "perc", "strings"),
+        _s("drop", 16, 1.0, "drums", "bass", "chords", "chords2", "lead", "arp",
+           "sub", "perc", "lead2", "strings", "brass"),
+        _s("outro", 8, 0.4, "drums", "pad", "texture"),
     ],
     "ambient": [
-        _s("intro", 8, 0.25, "pad"),
-        _s("A", 16, 0.4, "pad", "chords", "arp"),
-        _s("B", 16, 0.55, "pad", "chords", "arp", "lead"),
-        _s("A", 16, 0.4, "pad", "chords"),
-        _s("outro", 8, 0.2, "pad"),
+        _s("intro", 8, 0.25, "pad", "texture"),
+        _s("A", 16, 0.4, "pad", "chords", "arp", "texture"),
+        _s("B", 16, 0.55, "pad", "chords", "arp", "lead", "strings", "counter"),
+        _s("A", 16, 0.4, "pad", "chords", "texture", "counter"),
+        _s("outro", 8, 0.2, "pad", "texture"),
     ],
     "loop": [
         _s("loop", 8, 0.8),
     ],
     "cinematic": [
-        _s("intro", 8, 0.25, "pad", "chords"),
-        _s("build", 8, 0.5, "pad", "chords", "counter"),
-        _s("theme", 16, 0.8, "drums", "bass", "chords", "lead", "pad"),
-        _s("climax", 16, 1.0, "drums", "bass", "chords", "lead", "pad", "counter"),
-        _s("outro", 8, 0.3, "pad"),
+        _s("intro", 8, 0.25, "pad", "chords", "texture"),
+        _s("build", 8, 0.5, "pad", "chords", "counter", "strings", "perc"),
+        _s("theme", 16, 0.8, "drums", "bass", "chords", "lead", "pad",
+           "strings", "counter", "perc"),
+        _s("climax", 16, 1.0, "drums", "bass", "chords", "chords2", "lead", "pad",
+           "counter", "strings", "brass", "lead2", "sub", "perc"),
+        _s("outro", 8, 0.3, "pad", "strings", "texture"),
     ],
 }
+
+
+def apply_final_lift(sections: list["Section"], semitones: int = 2) -> None:
+    """Transpose the last occurrence of the most-repeated section.
+
+    The final-chorus key change is a cliche because it works: it makes the last
+    repeat feel like an arrival instead of a third identical pass.
+    """
+    if semitones == 0 or not sections:
+        return
+    counts: dict[str, int] = {}
+    for sec in sections:
+        counts[sec.name] = counts.get(sec.name, 0) + 1
+    repeated = [n for n, c in counts.items() if c >= 3]
+    if not repeated:
+        return
+    target = max(repeated, key=lambda n: counts[n])
+    for sec in reversed(sections):
+        if sec.name == target:
+            sec.transpose = semitones
+            break
 
 
 def _clone(sec: Section) -> Section:
