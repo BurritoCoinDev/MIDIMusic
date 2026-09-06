@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# App runtime data
+*.log
+/out/
+/models/
+/scratch/
+
+# Packaging
+packaging/windows/build/
+packaging/windows/dist/
+packaging/windows/Output/
+*.spec.bak
+
+# Large binary assets fetched at build/run time
+assets/soundfonts/*.sf2
+assets/soundfonts/*.sf3
+!assets/soundfonts/README.md
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
