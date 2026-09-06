@@ -17,16 +17,35 @@ __all__ = ["ADAPTERS", "available_generators", "create_generator", "register_ada
 log = logging.getLogger(__name__)
 
 # adapter name -> "module:ClassName"
+#
+# Audio backends default to the out-of-process adapter. The application bundle
+# contains no torch, so an in-process import would fail there even though it
+# works from a source checkout; running them in the provisioned runtime is the
+# only path that behaves the same in both.
 ADAPTERS: dict[str, str] = {
     "builtin": "midimusic.generators.builtin:BuiltinComposerGenerator",
-    "hf-musicgen": "midimusic.generators.musicgen:MusicGenGenerator",
-    "ace-step": "midimusic.generators.ace_step:AceStepGenerator",
-    "diffusers-audio": "midimusic.generators.diffusers_audio:DiffusersAudioGenerator",
+    "hf-musicgen": "midimusic.generators.remote:RemoteAudioGenerator",
+    "ace-step": "midimusic.generators.remote:RemoteAudioGenerator",
+    "diffusers-audio": "midimusic.generators.remote:RemoteAudioGenerator",
+    "diffrhythm": "midimusic.generators.remote:RemoteAudioGenerator",
     "hf-text2midi": "midimusic.generators.symbolic_hf:Text2MidiGenerator",
     "hf-anticipatory": "midimusic.generators.symbolic_hf:AnticipatoryGenerator",
     "onnx-midi": "midimusic.generators.symbolic_onnx:OnnxMidiGenerator",
-    "diffrhythm": "midimusic.generators.diffusers_audio:DiffusersAudioGenerator",
 }
+
+# The original in-process adapters, kept for development and for anyone who
+# deliberately runs everything in one environment.
+IN_PROCESS_ADAPTERS: dict[str, str] = {
+    "hf-musicgen": "midimusic.generators.musicgen:MusicGenGenerator",
+    "ace-step": "midimusic.generators.ace_step:AceStepGenerator",
+    "diffusers-audio": "midimusic.generators.diffusers_audio:DiffusersAudioGenerator",
+}
+
+
+def use_in_process_backends(enabled: bool = True) -> None:
+    """Route audio backends through this process instead of a worker."""
+    source = IN_PROCESS_ADAPTERS if enabled else dict.fromkeys(IN_PROCESS_ADAPTERS, "midimusic.generators.remote:RemoteAudioGenerator")
+    ADAPTERS.update(source)
 
 
 def register_adapter(name: str, target: str) -> None:

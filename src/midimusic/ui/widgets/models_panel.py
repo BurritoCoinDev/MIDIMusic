@@ -295,10 +295,12 @@ class ModelsPanel(QtWidgets.QWidget):
         self.install_log.setVisible(True)
         self.install_log.clear()
         self.install_button.setText("Cancel")
+        gpu = self.service.system.primary_gpu
         self._install = install_runtime(
             option,
             on_line=lambda line: self._install_bridge.line.emit(line),
             on_finished=lambda h: self._install_bridge.finished.emit(h.error or ""),
+            gfx_arch=gpu.gfx_arch if gpu else "",
         )
 
     @QtCore.Slot(str)

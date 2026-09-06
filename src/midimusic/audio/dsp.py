@@ -1,7 +1,8 @@
 """Signal processing between a generated buffer and a delivered file.
 
-Kept to numpy plus soxr so it works from a plain pip install on Windows with
-no compiler and no ffmpeg.
+Kept to numpy alone in the core path so it works from a plain pip install on
+Windows with no compiler and no ffmpeg, and so nothing here carries a
+statically-linked LGPL component.  Better resamplers are used when present.
 """
 
 from __future__ import annotations
@@ -40,23 +41,81 @@ def to_stereo(x: np.ndarray) -> np.ndarray:
 
 
 def resample(x: np.ndarray, src_rate: int, dst_rate: int, quality: str = "HQ") -> np.ndarray:
-    """Sample-rate convert with soxr, falling back to linear interpolation."""
+    """Sample-rate convert, using the best resampler available.
+
+    Preference order is soxr, then scipy's polyphase filter, then a windowed-
+    sinc implementation in numpy.  The numpy path exists so the core install
+    needs neither of the others: linear interpolation would audibly alias on a
+    32 kHz to 44.1 kHz conversion, which is exactly the case the audio models
+    produce.
+    """
     if src_rate == dst_rate or x.size == 0:
         return x
+
     try:
         import soxr
 
-        return np.asarray(soxr.resample(x, src_rate, dst_rate, quality=quality), dtype=np.float32)
+        return np.asarray(soxr.resample(x, src_rate, dst_rate, quality=quality),
+                          dtype=np.float32)
     except ImportError:
-        ratio = dst_rate / src_rate
-        n_out = int(round(x.shape[0] * ratio))
-        idx = np.linspace(0, x.shape[0] - 1, n_out, dtype=np.float64)
-        if x.ndim == 1:
-            return np.interp(idx, np.arange(x.shape[0]), x).astype(np.float32)
-        return np.stack(
+        pass
+
+    from math import gcd
+
+    divisor = gcd(int(src_rate), int(dst_rate))
+    up, down = int(dst_rate) // divisor, int(src_rate) // divisor
+
+    try:
+        from scipy.signal import resample_poly
+
+        return np.asarray(resample_poly(x, up, down, axis=0), dtype=np.float32)
+    except ImportError:
+        pass
+
+    return _resample_sinc(x, up, down)
+
+
+def _resample_sinc(x: np.ndarray, up: int, down: int, half_width: int = 16) -> np.ndarray:
+    """Polyphase resampling with a Kaiser-windowed sinc, in numpy only.
+
+    Upsamples by ``up`` and decimates by ``down`` in one convolution, with the
+    anti-imaging and anti-aliasing filter combined into a single kernel cut off
+    at the lower of the two Nyquist limits.
+    """
+    x = np.asarray(x, dtype=np.float32)
+    single = x.ndim == 1
+    if single:
+        x = x[:, None]
+
+    # Guard against a pathological ratio producing an enormous kernel.
+    if up > 512 or down > 512:
+        n_out = int(round(x.shape[0] * up / down))
+        idx = np.linspace(0, x.shape[0] - 1, n_out)
+        out = np.stack(
             [np.interp(idx, np.arange(x.shape[0]), x[:, c]) for c in range(x.shape[1])],
             axis=1,
         ).astype(np.float32)
+        return out[:, 0] if single else out
+
+    cutoff = 1.0 / max(up, down)
+    taps = 2 * half_width * max(up, down) + 1
+    n = np.arange(taps) - (taps - 1) / 2.0
+    kernel = 2 * cutoff * np.sinc(2 * cutoff * n)
+    kernel *= np.kaiser(taps, 8.0)
+    kernel = (kernel / kernel.sum()) * up
+
+    frames, channels = x.shape
+    upsampled = np.zeros((frames * up, channels), dtype=np.float64)
+    upsampled[::up] = x
+
+    pad = taps // 2
+    out_len = int(np.ceil(frames * up / down))
+    out = np.empty((out_len, channels), dtype=np.float32)
+    for c in range(channels):
+        padded = np.pad(upsampled[:, c], (pad, pad), mode="constant")
+        filtered = np.convolve(padded, kernel, mode="valid")
+        out[:, c] = filtered[::down][:out_len]
+    return out[:, 0] if single else out
 
 
 def peak_normalize(x: np.ndarray, target_db: float = -1.0) -> np.ndarray:

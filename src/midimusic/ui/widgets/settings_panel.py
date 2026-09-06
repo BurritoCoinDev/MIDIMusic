@@ -13,6 +13,13 @@ from ...core.service import AppService
 __all__ = ["SettingsPanel"]
 
 
+class _SoundFontBridge(QtCore.QObject):
+    """Marshals the download thread's callbacks onto the UI thread."""
+
+    progress = QtCore.Signal(float, str)
+    finished = QtCore.Signal(str, str)
+
+
 class PathRow(QtWidgets.QWidget):
     """A read/write directory field with a browse button."""
 
@@ -109,11 +116,33 @@ class SettingsPanel(QtWidgets.QWidget):
         self.soundfont = PathRow(settings.soundfont, "Default SoundFont (optional)")
         a_form.addRow("SoundFont", self.soundfont)
         sf_note = QtWidgets.QLabel(
-            "Used to render MIDI to audio. Without one, the built-in synth is used."
+            "Used to render MIDI to audio. Without one the built-in synth is used, "
+            "which always works but sounds plainer."
         )
         sf_note.setProperty("role", "dim")
         sf_note.setWordWrap(True)
         a_form.addRow("", sf_note)
+
+        sf_row = QtWidgets.QHBoxLayout()
+        self.sf_button = QtWidgets.QPushButton("Download MuseScore General (38 MB, MIT)")
+        self.sf_button.clicked.connect(self._download_soundfont)
+        sf_row.addWidget(self.sf_button)
+        self.sf_progress = QtWidgets.QProgressBar()
+        self.sf_progress.setRange(0, 100)
+        self.sf_progress.setVisible(False)
+        sf_row.addWidget(self.sf_progress, 1)
+        a_form.addRow("", sf_row)
+
+        self.sf_status = QtWidgets.QLabel("")
+        self.sf_status.setProperty("role", "dim")
+        self.sf_status.setWordWrap(True)
+        a_form.addRow("", self.sf_status)
+
+        self._sf_bridge = _SoundFontBridge()
+        self._sf_bridge.progress.connect(self._on_sf_progress)
+        self._sf_bridge.finished.connect(self._on_sf_finished)
+        self._sf_cancel = None
+        self._refresh_soundfont_state()
         layout.addWidget(audio)
 
         # -- compute --------------------------------------------------------
@@ -175,6 +204,56 @@ class SettingsPanel(QtWidgets.QWidget):
         save.clicked.connect(self.save)
         bar_row.addWidget(save)
         outer.addWidget(bar)
+
+    def _refresh_soundfont_state(self) -> None:
+        from ...core.assets import installed_soundfonts
+
+        found = installed_soundfonts(get_paths().soundfonts)
+        if found:
+            self.sf_status.setText(f"Installed: {', '.join(p.name for p in found)}")
+            self.sf_button.setText("Re-download MuseScore General")
+        else:
+            self.sf_status.setText("No SoundFont installed yet.")
+
+    def _download_soundfont(self) -> None:
+        from ...core.assets import SOUNDFONTS, download_soundfont
+
+        if self._sf_cancel is not None:
+            self._sf_cancel.set()
+            return
+        option = SOUNDFONTS[0]
+        self.sf_progress.setVisible(True)
+        self.sf_progress.setValue(0)
+        self.sf_button.setText("Cancel")
+        self._sf_cancel = download_soundfont(
+            option,
+            get_paths().soundfonts,
+            on_progress=lambda f, m: self._sf_bridge.progress.emit(f, m),
+            on_finished=lambda path, err: self._sf_bridge.finished.emit(
+                str(path or ""), err
+            ),
+        )
+
+    @QtCore.Slot(float, str)
+    def _on_sf_progress(self, fraction: float, message: str) -> None:
+        self.sf_progress.setValue(int(fraction * 100))
+        self.sf_status.setText(message)
+
+    @QtCore.Slot(str, str)
+    def _on_sf_finished(self, path: str, error: str) -> None:
+        self.sf_progress.setVisible(False)
+        self._sf_cancel = None
+        self.sf_button.setText("Download MuseScore General (38 MB, MIT)")
+        if error:
+            self.sf_status.setText(error)
+            return
+        if path:
+            # Select it straight away; downloading it and then not using it
+            # would be a confusing outcome.
+            self.soundfont.edit.setText(path)
+            self.service.settings.soundfont = path
+            save_settings(self.service.settings)
+        self._refresh_soundfont_state()
 
     def _update_disk(self) -> None:
         path = self.models_dir.value() or str(get_paths().models)

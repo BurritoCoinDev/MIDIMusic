@@ -32,10 +32,34 @@ class Vendor(str, Enum):
     UNKNOWN = "unknown"
 
 
-_VENDOR_IDS = {0x10DE: Vendor.NVIDIA, 0x1002: Vendor.AMD, 0x1022: Vendor.AMD,
-               0x8086: Vendor.INTEL, 0x106B: Vendor.APPLE}
+# PCI vendor IDs as reported by DXGI. 0x1022 is deliberately absent: that is
+# AMD's host-bridge/chipset ID, which no display adapter reports.
+_VENDOR_IDS = {
+    0x10DE: Vendor.NVIDIA,
+    0x1002: Vendor.AMD,
+    0x8086: Vendor.INTEL,
+    0x106B: Vendor.APPLE,
+}
 
-# RDNA3/RDNA4 discrete cards that AMD's Windows ROCm wheels target.
+# PCI DeviceId to LLVM target. This is the authoritative mapping: unlike the
+# adapter description string, a DeviceId is stable across OEMs and locales.
+_DEVICE_ID_GFX = {
+    0x744C: "gfx1100",  # Navi 31 - RX 7900 XTX / XT / GRE
+    0x7448: "gfx1100",  # Navi 31 GL - W7900
+    0x745E: "gfx1100",
+    0x7470: "gfx1101",  # Navi 32 - RX 7800 XT / 7700 XT
+    0x747E: "gfx1101",
+    0x7480: "gfx1102",  # Navi 33 - RX 7600 / 7600 XT
+    0x7483: "gfx1102",
+    0x7550: "gfx1200",  # Navi 44 - RX 9060
+    0x7590: "gfx1201",  # Navi 48 - RX 9070 / 9070 XT
+    0x7591: "gfx1201",
+}
+
+# Architectures AMD's Windows ROCm wheels actually target.
+ROCM_WINDOWS_GFX = {"gfx1100", "gfx1101", "gfx1102", "gfx1200", "gfx1201"}
+
+# Fallback only, for adapters whose DeviceId we do not recognise.
 _ROCM_WINDOWS_GFX = {
     "7900 xtx": "gfx1100", "7900 xt": "gfx1100", "7900 gre": "gfx1100",
     "7800 xt": "gfx1101", "7700 xt": "gfx1101",
@@ -52,13 +76,22 @@ class GPU:
     vram_mb: int = 0
     driver: str = ""
     gfx_arch: str = ""  # AMD LLVM target, e.g. gfx1100
+    device_id: int = 0  # PCI device id, used to resolve gfx_arch reliably
 
     @property
     def vram_gb(self) -> float:
         return round(self.vram_mb / 1024.0, 1)
 
     def supports_rocm_windows(self) -> bool:
-        return self.vendor is Vendor.AMD and bool(self.gfx_arch)
+        return self.vendor is Vendor.AMD and self.gfx_arch in ROCM_WINDOWS_GFX
+
+    def torch_extra(self) -> str:
+        """The wheel-variant extra for this card, e.g. torch[device-gfx1100].
+
+        Built from the detected architecture rather than hardcoded, so a 7800 XT
+        does not get sent the 7900 XTX build.
+        """
+        return f"torch[device-{self.gfx_arch}]" if self.gfx_arch else "torch"
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -101,7 +134,12 @@ class SystemInfo:
 # GPU enumeration
 # --------------------------------------------------------------------------
 
-def _gfx_for(name: str) -> str:
+def _gfx_for(name: str, device_id: int = 0) -> str:
+    """Resolve an AMD LLVM target, preferring the PCI DeviceId over the name."""
+    if device_id:
+        gfx = _DEVICE_ID_GFX.get(device_id)
+        if gfx:
+            return gfx
     low = name.lower()
     for key, gfx in _ROCM_WINDOWS_GFX.items():
         if key in low:
@@ -183,8 +221,11 @@ def _detect_windows_dxgi() -> list[GPU]:
                 # figure means an integrated display adapter we cannot use.
                 if not (desc.Flags & 0x2) and vram > 64:
                     vendor = _VENDOR_IDS.get(desc.VendorId, _vendor_from_name(name))
-                    gpus.append(GPU(name=name, vendor=vendor, vram_mb=vram,
-                                    gfx_arch=_gfx_for(name)))
+                    gpus.append(GPU(
+                        name=name, vendor=vendor, vram_mb=vram,
+                        gfx_arch=_gfx_for(name, desc.DeviceId),
+                        device_id=int(desc.DeviceId),
+                    ))
             release_proto(a_vtbl[2])(adapter)
             index += 1
         release_proto(vtbl[2])(factory)
@@ -323,20 +364,27 @@ def detect_system() -> SystemInfo:
         ram_gb=_ram_gb(),
         gpus=detect_gpus(),
     )
-    try:
-        import torch
+    # Deliberately does NOT import torch. Detection has to work before torch is
+    # installed (its whole purpose is choosing which torch to install), and
+    # importing a GPU stack into the UI process risks a native crash taking the
+    # window with it. Torch facts come from the out-of-process runtime probe.
+    return info
 
-        info.torch_installed = True
-        info.torch_version = torch.__version__
-        if torch.cuda.is_available():
-            # torch.cuda covers ROCm builds too; version.hip distinguishes them.
-            info.torch_device = "cuda"
-        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-            info.torch_device = "mps"
-        else:
-            info.torch_device = "cpu"
-    except Exception:
-        info.torch_installed = False
+
+def apply_runtime_probe(info: SystemInfo, probe: dict) -> SystemInfo:
+    """Fold the worker's torch report into a SystemInfo."""
+    if not probe:
+        return info
+    info.torch_installed = bool(probe.get("torch"))
+    info.torch_version = str(probe.get("torch") or "")
+    if probe.get("cuda"):
+        info.torch_device = "cuda"
+    elif probe.get("xpu"):
+        info.torch_device = "xpu"
+    elif probe.get("mps"):
+        info.torch_device = "mps"
+    elif info.torch_installed:
+        info.torch_device = "cpu"
     return info
 
 

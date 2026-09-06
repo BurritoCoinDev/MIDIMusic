@@ -2,7 +2,8 @@
 
 FLAC and WAV are written through python-soundfile, whose Windows wheels bundle
 libsndfile -- so there is no ffmpeg dependency and nothing to install
-separately.  Vorbis comments are added with mutagen afterwards.
+separately.  Tags are written through libsndfile's own string fields, which
+keeps a GPL tagging library out of the process.
 """
 
 from __future__ import annotations
@@ -103,46 +104,50 @@ def export_audio(
         # FLAC is integer-only; 32-bit float silently is not a thing.
         subtype = "PCM_24"
 
-    sf.write(str(path), x, options.sample_rate, subtype=subtype, format=container)
-
-    if options.tag and metadata is not None:
-        _write_tags(path, fmt, metadata)
+    _write_audio(path, x, options.sample_rate, subtype, container,
+                 metadata if options.tag else None)
     return path
 
 
-def _write_tags(path: Path, fmt: OutputFormat, meta: TrackMetadata) -> None:
-    try:
-        if fmt is OutputFormat.FLAC:
-            from mutagen.flac import FLAC
+def _write_audio(path: Path, x: np.ndarray, rate: int, subtype: str,
+                 container: str, metadata: TrackMetadata | None) -> None:
+    """Write the file, setting tags before the samples.
 
-            audio = FLAC(str(path))
-        else:
-            from mutagen.wave import WAVE
+    libsndfile only accepts string fields before the first audio frame is
+    written, so tagging has to happen inside the same open handle rather than
+    as a second pass over the finished file.
+    """
+    channels = 1 if x.ndim == 1 else x.shape[1]
+    with sf.SoundFile(str(path), "w", rate, channels,
+                      subtype=subtype, format=container) as handle:
+        if metadata is not None:
+            _apply_tags(handle, metadata)
+        handle.write(x)
 
-            audio = WAVE(str(path))
-            audio.add_tags() if audio.tags is None else None
-    except Exception:
-        return
 
-    try:
-        fields = {
-            "title": meta.title,
-            "artist": meta.artist,
-            "album": meta.album,
-            "genre": meta.genre,
-            "date": meta.date,
-            "comment": meta.comment,
-        }
-        for key, value in fields.items():
-            if value:
-                audio[key] = value
-        for key, value in meta.extra.items():
-            if value:
-                audio[key] = str(value)
-        audio.save()
-    except Exception:
-        # Tagging is a nicety; never fail an export because of it.
-        return
+def _apply_tags(handle: sf.SoundFile, meta: TrackMetadata) -> None:
+    fields = {
+        "title": meta.title,
+        "artist": meta.artist,
+        "album": meta.album,
+        "genre": meta.genre,
+        "date": meta.date,
+        "comment": meta.comment,
+    }
+    if meta.extra:
+        # libsndfile has no arbitrary key/value support, so fold the extras
+        # into the comment rather than dropping them.
+        details = ", ".join(f"{k}={v}" for k, v in meta.extra.items() if v)
+        if details:
+            fields["comment"] = f"{fields['comment']} [{details}]".strip()
+    for key, value in fields.items():
+        if not value:
+            continue
+        try:
+            setattr(handle, key, str(value))
+        except Exception:
+            # A container that does not support a given field is not an error.
+            continue
 
 
 def export_song(
