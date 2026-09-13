@@ -183,3 +183,75 @@ class TestWaveform:
         widget.show()
         qapp.processEvents()
         assert not widget.grab().isNull()
+
+
+class TestEntryPoint:
+    """The packaged app's startup path.
+
+    A frozen build runs its entry script as top-level ``__main__`` with no
+    package context. That is not how ``python -m midimusic`` runs, so the
+    normal test suite cannot see a failure that only appears once packaged --
+    which is exactly how an ImportError shipped in a release build. These tests
+    invoke the entry points the way PyInstaller does.
+    """
+
+    @staticmethod
+    def _run(script_args: list[str], timeout: int = 180):
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+        root = Path(__file__).resolve().parents[1]
+        return subprocess.run(
+            [sys.executable, *script_args],
+            capture_output=True, text=True, timeout=timeout, cwd=str(root), env=env,
+        )
+
+    def test_launcher_runs_as_a_bare_script(self):
+        # This is precisely how PyInstaller invokes the frozen entry point.
+        from pathlib import Path
+
+        launcher = Path(__file__).resolve().parents[1] / "packaging" / "windows" / "launcher.py"
+        assert launcher.exists(), "the frozen build's entry script is missing"
+        result = self._run([str(launcher), "--selftest"])
+        assert result.returncode == 0, (
+            f"launcher failed as a bare script:\n{result.stdout}\n{result.stderr}"
+        )
+
+    def test_module_entry_runs_as_a_bare_script(self):
+        # Belt and braces: __main__.py must not depend on relative imports
+        # either, so running it directly cannot break.
+        from pathlib import Path
+
+        entry = Path(__file__).resolve().parents[1] / "src" / "midimusic" / "__main__.py"
+        result = self._run([str(entry), "--selftest"])
+        assert result.returncode == 0, (
+            f"__main__.py failed as a bare script:\n{result.stdout}\n{result.stderr}"
+        )
+
+    def test_entry_has_no_relative_imports(self):
+        # The failure mode is silent in normal test runs, so assert the shape
+        # directly as well as the behaviour.
+        import re
+        from pathlib import Path
+
+        source = (
+            Path(__file__).resolve().parents[1] / "src" / "midimusic" / "__main__.py"
+        ).read_text(encoding="utf-8")
+        offenders = re.findall(r"^\s*from\s+\.", source, re.MULTILINE)
+        assert not offenders, (
+            "__main__.py uses relative imports; a frozen build runs it without "
+            "package context and they will fail at startup"
+        )
+
+    def test_selftest_exits_cleanly_via_module(self):
+        result = self._run(["-m", "midimusic", "--selftest"])
+        assert result.returncode == 0
+        assert "selftest ok" in result.stdout
+
+    def test_version_flag(self):
+        result = self._run(["-m", "midimusic", "--version"])
+        assert result.returncode == 0
+        assert "MIDIMusic" in result.stdout

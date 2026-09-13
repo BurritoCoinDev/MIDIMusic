@@ -1,21 +1,39 @@
-"""Application entry point."""
+"""Application entry point.
+
+Imports here are absolute, not relative. A frozen build runs its entry script
+as top-level ``__main__`` with no package context, so ``from .config import x``
+raises "attempted relative import with no known parent package" the moment the
+packaged app starts. Absolute imports work identically in both cases.
+"""
 
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
+__all__ = ["main"]
 
-def main(argv: list[str] | None = None) -> int:
+
+def _build_app(argv: list[str], offscreen: bool = False):
+    """Construct the application, service and window without running the loop.
+
+    Shared by normal startup and by ``--selftest`` so the self-test exercises
+    the real path rather than an approximation of it.
+    """
+    if offscreen:
+        # Lets the self-test run on a machine or CI runner with no desktop.
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
     from PySide6 import QtGui, QtWidgets
 
-    from .config.logging_setup import setup_logging
-    from .config.paths import get_paths, set_models_dir
-    from .config.settings import load_settings
-    from .core.service import AppService
-    from .theory.style import load_user_styles
-    from .ui.main_window import MainWindow
-    from .ui.theme import DARK, LIGHT, build_stylesheet
+    from midimusic.config.logging_setup import setup_logging
+    from midimusic.config.paths import get_paths, set_models_dir
+    from midimusic.config.settings import load_settings
+    from midimusic.core.service import AppService
+    from midimusic.theory.style import load_user_styles
+    from midimusic.ui.main_window import MainWindow
+    from midimusic.ui.theme import DARK, LIGHT, build_stylesheet
 
     setup_logging()
     log = logging.getLogger("midimusic")
@@ -29,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     if loaded:
         log.info("loaded %d user styles", loaded)
 
-    app = QtWidgets.QApplication(argv if argv is not None else sys.argv)
+    app = QtWidgets.QApplication(argv)
     app.setApplicationName("MIDIMusic")
     app.setOrganizationName("MIDIMusic")
     app.setStyleSheet(build_stylesheet(LIGHT if settings.theme == "light" else DARK))
@@ -40,8 +58,63 @@ def main(argv: list[str] | None = None) -> int:
 
     service = AppService(settings=settings)
     window = MainWindow(service)
+    return app, service, window, log
+
+
+def _selftest(argv: list[str]) -> int:
+    """Build the whole application, then exit. Returns 0 when it all worked.
+
+    This exists because "the process is still running" is not evidence that a
+    packaged app started: a frozen build that raises during startup shows an
+    error dialog and *keeps running*, so a liveness check reports success while
+    the user sees a traceback. Exercising construction and exiting with a
+    status code is something CI can actually verify.
+    """
+    try:
+        app, service, window, log = _build_app(argv, offscreen=True)
+    except Exception:
+        logging.getLogger("midimusic").exception("selftest failed during startup")
+        import traceback
+
+        traceback.print_exc()
+        return 1
+
+    try:
+        window.show()
+        app.processEvents()
+        summary = service.system.summary()
+        log.info("selftest ok on %s", summary)
+        print(f"selftest ok: {summary}")
+    except Exception:
+        logging.getLogger("midimusic").exception("selftest failed after startup")
+        import traceback
+
+        traceback.print_exc()
+        return 1
+    finally:
+        try:
+            window.close()
+            service.shutdown()
+        except Exception:
+            pass
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv if argv is None else argv)
+
+    if "--version" in args:
+        from midimusic import __version__
+
+        print(f"MIDIMusic {__version__}")
+        return 0
+
+    if "--selftest" in args:
+        return _selftest([a for a in args if a != "--selftest"])
+
+    app, _service, window, log = _build_app(args)
     window.show()
-    log.info("started on %s", service.system.summary())
+    log.info("started on %s", _service.system.summary())
     return app.exec()
 
 

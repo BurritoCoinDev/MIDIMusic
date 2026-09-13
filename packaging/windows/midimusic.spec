@@ -78,8 +78,11 @@ excludes = [
     "tkinter", "test", "unittest",
 ]
 
+# The entry script is a launcher, not the package's own __main__. PyInstaller
+# runs its entry as top-level __main__ with no package context, so freezing
+# midimusic/__main__.py directly makes its imports fail at startup.
 a = Analysis(
-    [str(ROOT / "src" / "midimusic" / "__main__.py")],
+    [str(ROOT / "packaging" / "windows" / "launcher.py")],
     pathex=[str(ROOT / "src")],
     binaries=binaries,
     datas=datas,

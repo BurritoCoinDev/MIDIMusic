@@ -76,9 +76,24 @@ try {
     # whole point of provisioning it per-GPU after install.
     if ($size -gt 900) { throw ("bundle is {0:N0} MB - is torch being pulled in?" -f $size) }
 
-    # Catch a missing hidden import before a user does.
-    & $py -c "import midimusic, midimusic.ui.main_window, midimusic.core.service; print('imports OK')"
-    if ($LASTEXITCODE -ne 0) { throw "the bundled package failed to import" }
+    # Run the frozen app's self-test. Importing the package in the BUILD venv
+    # proves nothing about the bundle: the packaged entry point runs without
+    # package context, which is how an ImportError once shipped. Only the
+    # built .exe can answer this, and only by its exit code -- a windowed
+    # PyInstaller app that fails at startup shows a dialog and keeps running,
+    # so a liveness check would call a dead build healthy.
+    $exeProc = Start-Process -FilePath $exe -ArgumentList "--selftest" -PassThru
+    if (-not $exeProc.WaitForExit(180000)) {
+        $exeProc.Kill()
+        throw "self-test never exited - the app is likely showing an error dialog"
+    }
+    if ($exeProc.ExitCode -ne 0) {
+        Write-Host "Recent log output:" -ForegroundColor Yellow
+        Get-ChildItem -Recurse "$env:LOCALAPPDATA\MIDIMusic\logs" -ErrorAction SilentlyContinue |
+            ForEach-Object { Get-Content $_.FullName -Tail 40 }
+        throw "self-test failed with exit code $($exeProc.ExitCode)"
+    }
+    Write-Host "Self-test passed" -ForegroundColor Green
 
     Write-Host "Bundle checks passed" -ForegroundColor Green
 

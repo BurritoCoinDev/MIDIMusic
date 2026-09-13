@@ -134,18 +134,44 @@ jobs:
           Write-Host ("bundle: {0:N0} MB" -f $mb)
           if ($mb -gt 900) { throw ("bundle is {0:N0} MB - is torch being pulled in?" -f $mb) }
 
-      - name: Check the built app actually launches
+      - name: Check the built app actually starts up
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          # Start the real .exe, give it time to build a window, then close it.
-          # A bundle that dies on startup - a missing hidden import, a Qt plugin
-          # that did not come along - fails here rather than in someone's hands.
-          $p = Start-Process -FilePath "dist/MIDIMusic/MIDIMusic.exe" -PassThru
-          Start-Sleep -Seconds 25
-          if ($p.HasExited) {
-            throw "the app exited on startup with code $($p.ExitCode)"
+
+          # Run the frozen app's self-test: it builds the QApplication, the
+          # service and the main window, then exits with a status code.
+          #
+          # A liveness check is NOT sufficient here and previously passed a
+          # broken build: when a windowed PyInstaller app raises during
+          # startup it shows a modal error dialog and KEEPS RUNNING, so
+          # "still alive after 25s" reported success while the app was in
+          # fact dead on arrival with an ImportError. An exit code cannot be
+          # faked that way, and a hang now means the dialog is up.
+          $p = Start-Process -FilePath "dist/MIDIMusic/MIDIMusic.exe" `
+                             -ArgumentList "--selftest" -PassThru
+          if (-not $p.WaitForExit(180000)) {
+            $p.Kill()
+            Get-ChildItem -Recurse "$env:LOCALAPPDATA\MIDIMusic\logs" -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "--- $($_.FullName)"; Get-Content $_.FullName -Tail 60 }
+            throw "self-test never exited - the app is almost certainly showing an error dialog"
           }
+          if ($p.ExitCode -ne 0) {
+            Get-ChildItem -Recurse "$env:LOCALAPPDATA\MIDIMusic\logs" -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host "--- $($_.FullName)"; Get-Content $_.FullName -Tail 60 }
+            throw "self-test failed with exit code $($p.ExitCode)"
+          }
+          Write-Host "self-test passed: the packaged app builds its window and exits cleanly"
+
+      - name: Check the GUI stays up
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # Now that startup is proven, confirm the real windowed path keeps
+          # running rather than exiting immediately.
+          $p = Start-Process -FilePath "dist/MIDIMusic/MIDIMusic.exe" -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) { throw "the app exited on startup with code $($p.ExitCode)" }
           Stop-Process -Id $p.Id -Force
           Write-Host "app started and stayed running"
 
