@@ -156,6 +156,13 @@ class AppService:
         if result is None:
             return []
 
+        # Some jobs write their own output -- deconstruction produces a folder
+        # of stems, not one file -- so take what they wrote rather than trying
+        # to re-derive a single artefact from it.
+        if result.paths:
+            self._record(job, result, list(result.paths))
+            return list(result.paths)
+
         out_dir = self.settings.resolved_output_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
         stem = self._unique_stem(out_dir, result.title or job.display_name())

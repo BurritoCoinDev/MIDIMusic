@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pytest
 
@@ -334,3 +335,66 @@ class TestBootstrap:
             bootstrap_module.create_runtime = original
 
         assert called.get("created"), "install did not provision an interpreter"
+
+
+class TestDeconstruct:
+    """Pulling a recording apart into layers."""
+
+    def test_the_separator_is_registered_and_described(self):
+        catalog = load_catalog()
+        separators = catalog.by_kind("separator")
+        assert separators, "no separator in the catalog"
+        for entry in separators:
+            assert entry.stems, f"{entry.id} declares no stems"
+            assert "vocals" in entry.stems
+            assert create_generator(entry) is not None
+
+    def test_it_reports_what_it_needs_rather_than_failing_late(self):
+        entry = load_catalog().get("demucs-htdemucs")
+        generator = create_generator(entry)
+        # Either ready, or it names what is missing. Never a silent failure.
+        assert generator.is_ready() or generator.missing_packages()
+
+    def test_a_missing_input_file_is_reported_clearly(self):
+        from midimusic.core.generator import BackendUnavailable
+
+        entry = load_catalog().get("demucs-htdemucs")
+        generator = create_generator(entry)
+        request = GenerationRequest(
+            prompt="x", model_id=entry.id,
+            extra={"input_path": "/definitely/not/here.wav"},
+        )
+        with pytest.raises((BackendUnavailable, Exception)) as caught:
+            generator.generate(request, GeneratorContext())
+        assert "not" in str(caught.value).lower() or "no such" in str(caught.value).lower()
+
+    def test_drums_are_not_pitch_transcribed(self):
+        # Running a pitch tracker over percussion yields noise, not a drum
+        # part, so it must be skipped deliberately rather than attempted.
+        from midimusic.core.deconstruct import DeconstructGenerator
+
+        entry = load_catalog().get("demucs-htdemucs")
+        generator = DeconstructGenerator(entry.id, entry)
+        path, count, reason = generator._transcribe_stem(
+            "drums", "/nonexistent.wav", Path("/tmp"), GeneratorContext()
+        )
+        assert path is None and count == 0
+        assert "percussion" in reason or "drum" in reason
+
+    def test_vocals_get_a_voice_program(self):
+        from midimusic.core.deconstruct import GM_FOR_STEM
+
+        # GM 52-54 are the choir/voice patches; a transcribed vocal line
+        # should not play back as a piano.
+        assert GM_FOR_STEM["vocals"] in (52, 53, 54)
+        assert GM_FOR_STEM["bass"] != GM_FOR_STEM["vocals"]
+
+    def test_stems_are_not_loudness_normalised(self):
+        # Normalising each stem independently would destroy their relative
+        # levels and make the set impossible to recombine into the mix.
+        import inspect
+
+        from midimusic.core import deconstruct
+
+        source = inspect.getsource(deconstruct.DeconstructGenerator.generate)
+        assert "target_lufs=None" in source

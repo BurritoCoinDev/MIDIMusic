@@ -13,6 +13,7 @@ from ..core.jobs import Job
 from ..core.service import AppService
 from .theme import DARK, LIGHT, build_stylesheet
 from .widgets.compose_panel import ComposePanel
+from .widgets.deconstruct_panel import DeconstructPanel
 from .widgets.library_panel import LibraryPanel, reveal_in_explorer
 from .widgets.models_panel import ModelsPanel
 from .widgets.queue_panel import QueuePanel
@@ -37,12 +38,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.setDocumentMode(True)
 
         self.compose = ComposePanel(service)
+        self.deconstruct = DeconstructPanel(service)
         self.queue = QueuePanel(service)
         self.library = LibraryPanel(service)
         self.models = ModelsPanel(service)
         self.settings_panel = SettingsPanel(service)
 
         self.tabs.addTab(self.compose, "Compose")
+        self.tabs.addTab(self.deconstruct, "Deconstruct")
         self.tabs.addTab(self.queue, "Queue")
         self.tabs.addTab(self.library, "Library")
         self.tabs.addTab(self.models, "Models")
@@ -50,6 +53,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(self.tabs)
 
         self.compose.submitted.connect(self._on_submitted)
+        self.deconstruct.submitted.connect(self._on_submitted)
         self.queue.job_finished.connect(self._on_job_finished)
         self.queue.show_output.connect(self._reveal_job_output)
         self.models.catalog_changed.connect(self.compose.refresh_models)

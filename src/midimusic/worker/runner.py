@@ -246,6 +246,62 @@ def _coerce(output, default_rate: int):
     return samples, rate
 
 
+def run_separate(req: dict) -> dict:
+    """Split a recording into stems with Demucs.
+
+    Runs here rather than in the application for the same reason the audio
+    generators do: the app bundle has no torch, and a native crash in a
+    separation model should cost one job rather than the session.
+    """
+    import torch
+
+    model_name = req.get("model") or "htdemucs"
+    device = _resolve_device(req.get("device", "auto"))
+    source = req["input_path"]
+    out_dir = req["output_dir"]
+
+    progress(0.05, f"Loading {model_name}", "load")
+    from demucs.api import Separator
+
+    def on_progress(data):
+        # Demucs reports per-segment progress; map it onto our 0-1 scale.
+        try:
+            done = float(data.get("segment_offset", 0))
+            total = float(data.get("audio_length", 0)) or 1.0
+            progress(0.15 + 0.75 * min(1.0, done / total), "Separating", "separate")
+        except Exception:
+            pass
+
+    separator = Separator(
+        model=model_name,
+        device=device,
+        progress=False,
+        callback=on_progress,
+    )
+
+    progress(0.15, "Separating stems", "separate")
+    _origin, stems = separator.separate_audio_file(source)
+
+    import os
+
+    import soundfile as sf
+
+    os.makedirs(out_dir, exist_ok=True)
+    rate = int(separator.samplerate)
+    written = {}
+    for name, tensor in stems.items():
+        data = tensor.detach().to("cpu").float().numpy()
+        if data.ndim == 2 and data.shape[0] <= 2 < data.shape[1]:
+            data = data.T
+        path = os.path.join(out_dir, f"{name}.wav")
+        sf.write(path, data, rate, subtype="FLOAT")
+        written[name] = path
+
+    _ = torch
+    progress(1.0, "Done", "separate")
+    return {"stems": written, "sample_rate": rate, "model": model_name, "device": device}
+
+
 def run_probe(_req: dict) -> dict:
     """Report what this runtime can actually do.
 
@@ -307,7 +363,7 @@ def run_probe(_req: dict) -> dict:
         info["torch_error"] = f"{type(exc).__name__}: {exc}"
         info["usable"] = False
 
-    for module in ("transformers", "diffusers", "acestep", "soundfile", "numpy"):
+    for module in ("transformers", "diffusers", "acestep", "demucs", "soundfile", "numpy"):
         try:
             __import__(module)
             info[module] = True
@@ -318,6 +374,7 @@ def run_probe(_req: dict) -> dict:
 
 BACKENDS = {
     "probe": run_probe,
+    "separate": run_separate,
     "hf-musicgen": run_musicgen,
     "diffusers-audio": run_stable_audio,
     "ace-step": run_ace_step,

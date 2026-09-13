@@ -48,6 +48,7 @@ class ModelEntry:
     env: dict[str, str] = field(default_factory=dict)
     incompatible: tuple[str, ...] = ()
     requires_binary: tuple[str, ...] = ()
+    stems: tuple[str, ...] = ()
     description: str = ""
     notes: str = ""
     source: str = "bundled"        # bundled | remote | user
@@ -98,7 +99,8 @@ class ModelEntry:
         for key, value in d.items():
             if key not in known:
                 continue
-            if key in ("devices", "outputs", "extras", "incompatible", "requires_binary"):
+            if key in ("devices", "outputs", "extras", "incompatible",
+                       "requires_binary", "stems"):
                 value = tuple(value or ())
             clean[key] = value
         clean.setdefault("id", d.get("id", "unknown"))

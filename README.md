@@ -27,10 +27,41 @@ So MIDIMusic runs both:
 | Finished audio, optionally with vocals | Audio models → FLAC |
 | An editable score | The built-in composer or a symbolic model → MIDI |
 | Audio *and* a rough score | Audio model → FLAC, then transcription → MIDI |
+| A song you already have, taken apart | Deconstruct → per-layer FLAC and MIDI |
 
 The transcription bridge (basic-pitch) is honest about what it is: good on
 sparse or solo material, rough on dense mixes. It is a starting point, not a
 faithful decomposition.
+
+---
+
+## Deconstruct: taking a song apart
+
+Drop in a finished recording and it splits into layers — drums, bass, vocals
+and everything else, or six layers with guitar and piano separated out. Each
+layer is written as its own FLAC, and the pitched ones can be transcribed to
+MIDI at the same time.
+
+Transcribing per stem is the point. Pitch estimation on an isolated bass line
+or vocal is a far easier problem than on a full mix, so the notes you get back
+are usable rather than mush.
+
+**On vocals and MIDI**, since the two do not obviously fit together: MIDI has
+no concept of a voice. It carries note events. So a vocal layer gives you three
+different things — the isolated audio, the sung melody as editable notes (with
+a voice patch, not a piano), and, where lyrics are known, MIDI lyric
+meta-events aligned to those notes. The audio is the voice; the MIDI is what it
+sang. Drums are deliberately not pitch-transcribed: running a pitch tracker
+over percussion produces noise, and a drum part needs a different kind of model
+entirely.
+
+It also estimates tempo and key. Key detection reports alternatives, because a
+key and its relative minor contain identical notes and no amount of analysis
+fully separates them — the app says "A minor (or C major)" rather than picking
+one and sounding certain.
+
+Separation uses Demucs (MIT), so unlike some of the generation models there is
+no non-commercial clause on what comes out.
 
 ---
 

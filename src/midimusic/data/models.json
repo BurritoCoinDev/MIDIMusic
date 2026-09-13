@@ -279,6 +279,82 @@
       "description": "Fast full-song latent diffusion. Potentially the quickest long-form option.",
       "notes": "Needs espeak-ng installed. Drop bitsandbytes from its requirements; it is training-only. Licence of the VAE component is the blocker, not the generator.",
       "license_note": "Generator weights badge Apache-2.0, but the required DiffRhythm-vae is under the Stability Community License, and DiffRhythm-1_2 declares no licence at all. Treat the whole pipeline as non-Apache until upstream clarifies."
+    },
+    {
+      "id": "demucs-htdemucs",
+      "name": "Demucs (4 stems)",
+      "kind": "separator",
+      "adapter": "demucs",
+      "repo": "htdemucs",
+      "license": "MIT",
+      "commercial_use": true,
+      "size_gb": 0.3,
+      "vram_gb": 4.0,
+      "devices": [
+        "cuda",
+        "rocm",
+        "cpu"
+      ],
+      "tier": 1,
+      "outputs": [
+        "flac",
+        "wav",
+        "midi"
+      ],
+      "vocals": true,
+      "sample_rate": 44100,
+      "max_duration": 1800,
+      "extras": [
+        "torch",
+        "demucs"
+      ],
+      "stems": [
+        "drums",
+        "bass",
+        "vocals",
+        "other"
+      ],
+      "description": "Splits a recording into drums, bass, vocals and everything else.",
+      "notes": "Hybrid Transformer Demucs. Roughly real-time on a GPU; several minutes per song on CPU."
+    },
+    {
+      "id": "demucs-6s",
+      "name": "Demucs (6 stems)",
+      "kind": "separator",
+      "adapter": "demucs",
+      "repo": "htdemucs_6s",
+      "license": "MIT",
+      "commercial_use": true,
+      "size_gb": 0.3,
+      "vram_gb": 4.0,
+      "devices": [
+        "cuda",
+        "rocm",
+        "cpu"
+      ],
+      "tier": 2,
+      "outputs": [
+        "flac",
+        "wav",
+        "midi"
+      ],
+      "vocals": true,
+      "sample_rate": 44100,
+      "max_duration": 1800,
+      "extras": [
+        "torch",
+        "demucs"
+      ],
+      "stems": [
+        "drums",
+        "bass",
+        "vocals",
+        "guitar",
+        "piano",
+        "other"
+      ],
+      "description": "Adds separate guitar and piano layers to the four-stem split.",
+      "notes": "Guitar and piano separation is less reliable than the core four; expect bleed."
     }
   ],
   "dropped": [

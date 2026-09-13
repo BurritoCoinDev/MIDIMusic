@@ -192,3 +192,66 @@ class TestDependencyHygiene:
         buffer = render_song_fallback(song)
         path = export_audio(buffer, tmp_path / "fallback.flac", OutputFormat.FLAC)
         assert path.exists() and path.stat().st_size > 1000
+
+
+class TestAnalysis:
+    """Tempo and key estimation.
+
+    These are estimates, so the assertions are about being usefully close and
+    honestly calibrated rather than exactly right. Key detection in particular
+    cannot fully separate a key from its relative -- they contain identical
+    notes -- which is why the estimator reports alternatives.
+    """
+
+    @staticmethod
+    def _render(style: str, key: str, tempo: float):
+        from midimusic.audio.synth_fallback import render_song_fallback
+        from midimusic.theory.composer import compose
+
+        # modulate=False: the final-chorus key lift would put the piece in two
+        # keys, which is not what a key estimate is being asked about.
+        song = compose(style, key, tempo=tempo, duration_seconds=22, seed=3,
+                       complexity=0.6, modulate=False)
+        return render_song_fallback(song)
+
+    @pytest.mark.parametrize("style,tempo", [("pop", 120), ("lofi", 85), ("jazz", 140)])
+    def test_tempo_is_close(self, style, tempo):
+        from midimusic.audio.analyze import estimate_tempo
+
+        buffer = self._render(style, "C major", tempo)
+        found, confidence = estimate_tempo(buffer.samples, buffer.sample_rate)
+        assert abs(found - tempo) < 4, f"expected ~{tempo}, got {found}"
+        assert 0.0 <= confidence <= 1.0
+
+    def test_key_lands_in_the_right_neighbourhood(self):
+        from midimusic.audio.analyze import estimate_key
+
+        buffer = self._render("pop", "C major", 120)
+        key, confidence, chroma, alternatives = estimate_key(
+            buffer.samples, buffer.sample_rate
+        )
+        assert key, "no key was estimated"
+        assert len(chroma) == 12
+        assert 0.0 <= confidence <= 1.0
+        # C major, its relative A minor and its parallel C minor are all
+        # defensible readings of this material; anything else is a real miss.
+        assert key in {"C major", "A minor", "C minor"}, key
+        assert alternatives and alternatives[0][0] == key
+
+    def test_analysis_degrades_rather_than_raising(self):
+        from midimusic.audio.analyze import analyze_audio
+
+        tiny = np.zeros((64, 2), dtype=np.float32)
+        result = analyze_audio(tiny, 44100)
+        assert result.tempo == 0.0 and result.key == ""
+
+    def test_describe_flags_an_ambiguous_key(self):
+        from midimusic.audio.analyze import AudioAnalysis
+
+        confident = AudioAnalysis(tempo=120, key="C major", key_confidence=0.9,
+                                  key_alternatives=[("C major", 1.0), ("A minor", 0.5)])
+        # Match the parenthetical form, not a bare "or": "major" contains one.
+        assert "(or " not in confident.describe()
+        unsure = AudioAnalysis(tempo=120, key="C major", key_confidence=0.1,
+                               key_alternatives=[("C major", 1.0), ("A minor", 0.95)])
+        assert "(or A minor)" in unsure.describe()

@@ -28,7 +28,9 @@ def window(qapp, service):
 class TestMainWindow:
     def test_every_tab_constructs(self, window):
         titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
-        assert titles == ["Compose", "Queue", "Library", "Models", "Settings"]
+        assert titles == [
+            "Compose", "Deconstruct", "Queue", "Library", "Models", "Settings",
+        ]
 
     def test_switching_tabs_does_not_raise(self, window, qapp):
         for i in range(window.tabs.count()):
@@ -297,3 +299,41 @@ class TestDeferredCallbacksSurviveTeardown:
         qapp.processEvents()
 
         assert not errors, f"a deferred callback outlived its widget: {errors}"
+
+
+class TestDeconstructPanel:
+    def test_it_offers_the_separators(self, window):
+        panel = window.deconstruct
+        assert panel.model.count() >= 1
+        assert "vocals" in panel.stem_summary.text()
+
+    def test_generate_is_disabled_until_a_song_is_chosen(self, window):
+        assert not window.deconstruct.go.isEnabled()
+
+    def test_choosing_a_file_enables_it_and_builds_a_request(self, window, qapp, tmp_path):
+        import numpy as np
+        import soundfile as sf
+
+        source = tmp_path / "song.flac"
+        sf.write(str(source), np.zeros((44100, 2), dtype="float32"), 44100)
+
+        panel = window.deconstruct
+        panel.set_source(str(source))
+        qapp.processEvents()
+
+        assert panel.go.isEnabled()
+        request = panel.build_request()
+        assert request.extra["input_path"] == str(source)
+        assert request.extra["transcribe"] is True
+
+    def test_the_vocal_note_appears_only_with_transcription_on(self, window, qapp):
+        # isHidden, not isVisible: a widget inside a window that was never
+        # shown reports isVisible() False whatever its own flag says, so the
+        # question is whether it was explicitly hidden.
+        panel = window.deconstruct
+        panel.transcribe.setChecked(True)
+        qapp.processEvents()
+        assert not panel.vocal_note.isHidden()
+        panel.transcribe.setChecked(False)
+        qapp.processEvents()
+        assert panel.vocal_note.isHidden()
