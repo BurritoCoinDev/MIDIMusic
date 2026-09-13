@@ -12,6 +12,9 @@ from ...core.service import AppService
 
 __all__ = ["SettingsPanel"]
 
+# How long the "Saved" confirmation stays on screen.
+SAVED_MESSAGE_MS = 2500
+
 
 class _SoundFontBridge(QtCore.QObject):
     """Marshals the download thread's callbacks onto the UI thread."""
@@ -276,5 +279,11 @@ class SettingsPanel(QtWidgets.QWidget):
         s.default_complexity = self.default_complexity.value() / 100.0
         save_settings(s)
         self.saved_label.setText("Saved")
-        QtCore.QTimer.singleShot(2500, lambda: self.saved_label.setText(""))
+        # Pass self as the timer's context object. Without it the callback
+        # outlives the widget: close the window within the delay and the lambda
+        # fires against a deleted C++ object, raising inside the Qt event loop.
+        # Tying the connection to self means it is dropped when self goes.
+        QtCore.QTimer.singleShot(
+            SAVED_MESSAGE_MS, self, lambda: self.saved_label.setText("")
+        )
         self.settings_changed.emit()

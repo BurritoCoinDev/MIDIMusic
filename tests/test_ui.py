@@ -8,6 +8,7 @@ the UI without touching the widgets' internals.
 
 from __future__ import annotations
 
+import sys
 import time
 
 import pytest
@@ -255,3 +256,44 @@ class TestEntryPoint:
         result = self._run(["-m", "midimusic", "--version"])
         assert result.returncode == 0
         assert "MIDIMusic" in result.stdout
+
+
+class TestDeferredCallbacksSurviveTeardown:
+    """Timers must not outlive the widgets they touch.
+
+    A ``QTimer.singleShot`` without a context object keeps firing after its
+    widget is destroyed, and the callback then touches a deleted C++ object.
+    That raises inside the Qt event loop, where it does not propagate to the
+    caller -- so it surfaces as a mysterious error rather than a traceback at
+    the call site.
+    """
+
+    def test_save_confirmation_timer_dies_with_the_panel(self, qapp, service, monkeypatch):
+        from PySide6 import QtCore
+
+        from midimusic.ui.widgets import settings_panel as module
+
+        # Shorten the delay so the test does not wait the full display time.
+        monkeypatch.setattr(module, "SAVED_MESSAGE_MS", 50)
+
+        panel = module.SettingsPanel(service)
+        panel.save()
+        panel.deleteLater()
+        panel.setParent(None)
+        del panel
+        qapp.processEvents()
+
+        errors: list[BaseException] = []
+
+        def record(exc_type, exc, tb):
+            errors.append(exc)
+
+        monkeypatch.setattr(sys, "excepthook", record)
+
+        # Spin well past the timer so a surviving callback would fire here.
+        deadline = QtCore.QDeadlineTimer(400)
+        while not deadline.hasExpired():
+            qapp.processEvents()
+        qapp.processEvents()
+
+        assert not errors, f"a deferred callback outlived its widget: {errors}"
