@@ -112,8 +112,13 @@ RUNTIME_OPTIONS: list[RuntimeOption] = [
     ),
 ]
 
-# The application libraries every runtime needs on top of torch.
-BASE_PACKAGES = ("transformers", "soundfile", "numpy")
+# The application libraries every runtime needs on top of torch. Demucs is
+# here rather than left to a per-model install because taking a recording
+# apart is a headline feature and it is a few megabytes of pure Python -- its
+# weights are a separate download. The transcription stack is not: it pulls
+# librosa and numba, which is a lot to hand someone who only wants to
+# generate. That one is installed from its model card when it is wanted.
+BASE_PACKAGES = ("transformers", "soundfile", "numpy", "demucs")
 
 
 @dataclass

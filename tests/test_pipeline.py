@@ -590,6 +590,14 @@ class TestRemix:
 
 
 class TestModelPackages:
+    def test_separation_works_after_one_runtime_install(self):
+        from midimusic.core.runtime import BASE_PACKAGES
+
+        # Taking a recording apart is a headline feature. Leaving its library
+        # to a second, separate install is how it ended up permanently "not
+        # ready" for anyone who installed the runtime and stopped there.
+        assert "demucs" in BASE_PACKAGES
+
     def test_torch_is_never_reinstalled_from_pypi(self):
         from midimusic.core.runtime import model_packages
 
