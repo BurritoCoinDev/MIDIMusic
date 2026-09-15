@@ -237,6 +237,19 @@ class TestEntryPoint:
             capture_output=True, text=True, timeout=timeout, cwd=str(root), env=env,
         )
 
+    def test_the_selftest_notices_a_backend_missing_from_the_build(self, monkeypatch):
+        from midimusic import __main__ as entry
+
+        # The frozen build's real failure mode: the app starts perfectly and
+        # the backends are simply absent, because nothing imports them by name
+        # and the bundler therefore never saw them.
+        assert entry._missing_backends() == []
+        monkeypatch.setattr(
+            entry, "_backend_modules",
+            lambda: ("midimusic.core.registry", "midimusic.nonexistent_backend"),
+        )
+        assert entry._missing_backends() == ["midimusic.nonexistent_backend"]
+
     def test_launcher_runs_as_a_bare_script(self):
         # This is precisely how PyInstaller invokes the frozen entry point.
         from pathlib import Path

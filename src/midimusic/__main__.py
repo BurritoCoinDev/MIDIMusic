@@ -82,8 +82,18 @@ def _selftest(argv: list[str]) -> int:
     try:
         window.show()
         app.processEvents()
+        missing = _missing_backends()
+        if missing:
+            # A frozen build drops these silently, because they are only ever
+            # imported by name. The app still starts; the backends are simply
+            # gone from the model list, which is not something a startup check
+            # would otherwise notice.
+            message = "backends missing from this build: " + ", ".join(missing)
+            log.error("selftest failed: %s", message)
+            print(f"selftest failed: {message}", file=sys.stderr)
+            return 1
         summary = service.system.summary()
-        log.info("selftest ok on %s", summary)
+        log.info("selftest ok on %s (%d backends)", summary, _backend_count())
         print(f"selftest ok: {summary}")
     except Exception:
         logging.getLogger("midimusic").exception("selftest failed after startup")
@@ -98,6 +108,29 @@ def _selftest(argv: list[str]) -> int:
         except Exception:
             pass
     return 0
+
+
+def _backend_modules() -> tuple[str, ...]:
+    from midimusic.core.registry import adapter_modules
+
+    return adapter_modules()
+
+
+def _backend_count() -> int:
+    return len(_backend_modules())
+
+
+def _missing_backends() -> list[str]:
+    """Adapter modules this build cannot import."""
+    import importlib
+
+    missing = []
+    for name in _backend_modules():
+        try:
+            importlib.import_module(name)
+        except Exception:
+            missing.append(name)
+    return missing
 
 
 def main(argv: list[str] | None = None) -> int:
