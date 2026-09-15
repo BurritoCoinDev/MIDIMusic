@@ -27,7 +27,9 @@ class Settings:
     # Generation defaults
     default_backend: str = "builtin"
     default_style: str = "pop"
-    default_duration: int = 120
+    default_duration: int = 120        # kept for older settings files
+    default_min_duration: int = 90
+    default_max_duration: int = 180
     default_complexity: float = 0.7
     default_variations: int = 2
     soundfont: str = ""
@@ -54,10 +56,21 @@ class Settings:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Settings:
         known = {f.name for f in fields(cls)}
-        clean = {k: v for k, v in (data or {}).items() if k in known}
+        data = data or {}
+        clean = {k: v for k, v in data.items() if k in known}
         obj = cls(**clean)
-        obj.extra = {k: v for k, v in (data or {}).items() if k not in known}
+        obj.extra = {k: v for k, v in data.items() if k not in known}
+        # Settings files written before lengths became a range carry a single
+        # duration. Honour it as a fixed length rather than silently moving
+        # that user onto the new default band.
+        if "default_duration" in data and "default_min_duration" not in data:
+            obj.default_min_duration = obj.default_max_duration = obj.default_duration
         return obj
+
+    def duration_range(self) -> tuple[int, int]:
+        """The default length band, always ordered low to high."""
+        low, high = int(self.default_min_duration), int(self.default_max_duration)
+        return (low, high) if low <= high else (high, low)
 
     def resolved_output_dir(self) -> Path:
         return Path(self.output_dir) if self.output_dir else get_paths().output

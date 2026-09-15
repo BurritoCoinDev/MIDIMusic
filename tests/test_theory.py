@@ -179,3 +179,65 @@ class TestMelody:
         motif = mel.make_motif()
         variants = [mel.develop(motif, i) for i in range(6)]
         assert any(v.rhythm == motif.rhythm for v in variants)
+
+
+class TestOrchestralSections:
+    """Which section of an orchestra a General MIDI program belongs to."""
+
+    def test_the_families_land_where_a_score_puts_them(self):
+        from midimusic.theory.orchestra import section_for
+
+        cases = {
+            40: "Strings",      # violin
+            42: "Strings",      # cello
+            48: "Strings",      # string ensemble
+            56: "Brass",        # trumpet
+            60: "Brass",        # french horn
+            68: "Woodwinds",    # oboe
+            73: "Woodwinds",    # flute
+            0: "Keyboards",     # piano
+            19: "Keyboards",    # church organ
+            52: "Voice",        # choir
+        }
+        for program, expected in cases.items():
+            assert section_for(program) == expected, program
+
+    def test_timpani_is_percussion_not_a_string(self):
+        from midimusic.theory.orchestra import family_name, section_for
+
+        # Program 47 sits at the end of the GM strings block, which is a quirk
+        # of the standard rather than a statement about the instrument.
+        assert section_for(47) == "Percussion"
+        assert family_name(47) == "Timpani"
+
+    def test_tuned_percussion_counts_as_percussion(self):
+        from midimusic.theory.orchestra import section_for
+
+        for program in (9, 11, 14):  # glockenspiel, vibraphone, tubular bells
+            assert section_for(program) == "Percussion"
+
+    def test_a_drum_track_is_percussion_whatever_its_program(self):
+        from midimusic.theory.orchestra import family_name, section_for
+
+        assert section_for(48, is_drum=True) == "Percussion"
+        assert family_name(48, is_drum=True) == "Drum kit"
+
+    def test_the_sung_line_reservation_is_honoured(self):
+        from midimusic.theory.orchestra import section_for
+
+        # Multi-instrument transcribers put a sung line on 100/101, where
+        # General MIDI would otherwise have synth effects.
+        assert section_for(100) == "Voice"
+        assert section_for(101) == "Voice"
+
+    def test_every_program_maps_somewhere(self):
+        from midimusic.theory.orchestra import SCORE_ORDER, section_for
+
+        for program in range(128):
+            assert section_for(program) in SCORE_ORDER
+
+    def test_score_order_reads_top_to_bottom(self):
+        from midimusic.theory.orchestra import sort_key
+
+        assert sort_key("Woodwinds") < sort_key("Brass") < sort_key("Percussion")
+        assert sort_key("Percussion") < sort_key("Strings")

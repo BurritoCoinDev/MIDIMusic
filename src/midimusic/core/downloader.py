@@ -124,6 +124,11 @@ def download_model(
             ignore = ["*.msgpack", "*.h5", "*.onnx_data" if entry.adapter != "onnx-midi" else ""]
             ignore = [p for p in ignore if p]
 
+            # Some repos hold several checkpoints of the same model. Fetching
+            # all of them would be gigabytes for a model that needs one, so an
+            # entry may name the files it actually wants.
+            allow = list(entry.files) or None
+
             class _Callback:
                 """Adapts hub progress to a simple fraction."""
 
@@ -140,7 +145,8 @@ def download_model(
                 revision=entry.revision or "main",
                 cache_dir=str(models_dir / "hub"),
                 token=token or None,
-                ignore_patterns=ignore or None,
+                allow_patterns=allow,
+                ignore_patterns=None if allow else (ignore or None),
                 max_workers=4,
                 tqdm_class=_make_tqdm(report, handle),
             )

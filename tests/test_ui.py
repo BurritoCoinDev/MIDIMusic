@@ -66,14 +66,38 @@ class TestComposePanel:
     def test_request_reflects_the_controls(self, window):
         panel = window.compose
         panel.prompt.setPlainText("test prompt")
-        panel.duration.setValue(45)
+        panel.duration.set_values(45, 45)
         panel.variations.setValue(2)
         panel.complexity.setValue(80)
         request = panel.build_request()
         assert request.prompt == "test prompt"
         assert request.duration_seconds == 45
+        assert request.min_duration_seconds == 45
+        assert request.max_duration_seconds == 45
         assert request.variations == 2
         assert request.extra["complexity"] == pytest.approx(0.8)
+
+    def test_a_length_range_gives_the_variations_different_lengths(self, window, service):
+        panel = window.compose
+        panel.prompt.setPlainText("range test")
+        panel.duration.set_values(30, 90)
+        request = panel.build_request()
+        assert request.min_duration_seconds == 30
+        assert request.max_duration_seconds == 90
+
+        from midimusic.core.models import resolve_durations
+
+        lengths = resolve_durations(request, 4, cap=900.0)
+        assert all(30 <= n <= 90 for n in lengths)
+        assert len(set(lengths)) == 4
+
+    def test_the_ends_of_the_range_cannot_cross(self, window):
+        panel = window.compose
+        panel.duration.set_values(60, 120)
+        panel.duration.minimum.setValue(200)
+        assert panel.duration.maximum.value() == 200
+        panel.duration.maximum.setValue(30)
+        assert panel.duration.minimum.value() == 30
 
     def test_an_estimate_is_offered_before_committing(self, window, qapp):
         window.compose.prompt.setPlainText("ambient")
@@ -86,7 +110,7 @@ class TestGenerationThroughTheUi:
         panel = window.compose
         panel.prompt.setPlainText("gentle ambient piece")
         panel.output_format.setCurrentIndex(panel.output_format.findData("midi"))
-        panel.duration.setValue(20)
+        panel.duration.set_values(20, 20)
         panel.variations.setValue(1)
         qapp.processEvents()
 
@@ -113,7 +137,7 @@ class TestGenerationThroughTheUi:
         panel = window.compose
         panel.prompt.setPlainText("short test")
         panel.output_format.setCurrentIndex(panel.output_format.findData("midi"))
-        panel.duration.setValue(15)
+        panel.duration.set_values(15, 15)
         panel.submit()
         for _ in range(60):
             qapp.processEvents()
@@ -144,14 +168,14 @@ class TestModelsPanel:
 class TestSettingsPanel:
     def test_saving_round_trips(self, window, service):
         panel = window.settings_panel
-        panel.default_duration.setValue(210)
+        panel.default_duration.set_values(150, 210)
         panel.lufs.setValue(-16.0)
         panel.save()
 
         from midimusic.config.settings import load_settings
 
         reloaded = load_settings(force=True)
-        assert reloaded.default_duration == 210
+        assert reloaded.duration_range() == (150, 210)
         assert reloaded.target_lufs == -16.0
 
     def test_soundfont_state_is_reported(self, window):
@@ -325,6 +349,47 @@ class TestDeconstructPanel:
         request = panel.build_request()
         assert request.extra["input_path"] == str(source)
         assert request.extra["transcribe"] is True
+
+    def test_it_offers_the_orchestral_transcriber_too(self, window):
+        panel = window.deconstruct
+        ids = [panel.model.itemData(i) for i in range(panel.model.count())]
+        assert "yourmt3-orchestral" in ids
+
+    def test_choosing_the_transcriber_switches_the_controls(self, window, qapp, tmp_path):
+        import numpy as np
+        import soundfile as sf
+
+        source = tmp_path / "cue.flac"
+        sf.write(str(source), np.zeros((44100, 2), dtype="float32"), 44100)
+
+        panel = window.deconstruct
+        panel.set_source(str(source))
+        panel.model.setCurrentIndex(panel.model.findData("yourmt3-orchestral"))
+        qapp.processEvents()
+
+        # Stem format and per-stem transcription are meaningless for a model
+        # that writes a score, so they go away rather than sitting there inert.
+        assert panel.format.isHidden()
+        assert panel.transcribe.isHidden()
+        assert not panel.score_note.isHidden()
+        assert "Strings" in panel.stem_summary.text()
+
+        request = panel.build_request()
+        assert request.model_id == "yourmt3-orchestral"
+        assert request.output_format.value == "midi"
+
+    def test_a_length_limit_reaches_the_request(self, window, qapp, tmp_path):
+        import numpy as np
+        import soundfile as sf
+
+        source = tmp_path / "long.flac"
+        sf.write(str(source), np.zeros((44100, 2), dtype="float32"), 44100)
+
+        panel = window.deconstruct
+        panel.set_source(str(source))
+        panel.limit.setValue(90)
+        qapp.processEvents()
+        assert panel.build_request().extra["max_seconds"] == 90.0
 
     def test_the_vocal_note_appears_only_with_transcription_on(self, window, qapp):
         # isHidden, not isVisible: a widget inside a window that was never

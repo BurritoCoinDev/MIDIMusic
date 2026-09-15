@@ -13,6 +13,7 @@ from ...prompt.parser import parse_prompt
 from ...theory.pitch import NOTE_NAMES
 from ...theory.structure import FORMS
 from ...theory.style import list_styles
+from .duration_range import DurationRange
 
 __all__ = ["ComposePanel"]
 
@@ -51,6 +52,7 @@ class ComposePanel(QtWidgets.QWidget):
         self._build()
         self.refresh_models()
         self._on_prompt_changed()
+        self._on_duration_changed()
 
     # -- construction -------------------------------------------------------
 
@@ -176,12 +178,14 @@ class ComposePanel(QtWidgets.QWidget):
         tempo_row.addWidget(self.structure, 1)
         form.addRow("Tempo / form", tempo_row)
 
-        self.duration = QtWidgets.QSpinBox()
-        self.duration.setRange(5, 900)
-        self.duration.setValue(int(self.service.settings.default_duration))
-        self.duration.setSuffix(" s")
-        self.duration.valueChanged.connect(self._update_estimate)
+        low, high = self.service.settings.duration_range()
+        self.duration = DurationRange(low, high)
+        self.duration.changed.connect(self._on_duration_changed)
         form.addRow("Length", self.duration)
+        self.duration_hint = QtWidgets.QLabel("")
+        self.duration_hint.setProperty("role", "dim")
+        self.duration_hint.setWordWrap(True)
+        form.addRow("", self.duration_hint)
 
         self.complexity = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.complexity.setRange(0, 100)
@@ -256,6 +260,10 @@ class ComposePanel(QtWidgets.QWidget):
         self.lyrics.setVisible(not checked)
         self.lyrics_label.setVisible(not checked)
 
+    def _on_duration_changed(self) -> None:
+        self.duration_hint.setText(self.duration.describe())
+        self._update_estimate()
+
     def _on_complexity(self, value: int) -> None:
         words = [
             (25, "Sparse - a few core parts"),
@@ -311,7 +319,7 @@ class ComposePanel(QtWidgets.QWidget):
 
         caps = generator.capabilities() if generator else None
         if caps:
-            self.duration.setMaximum(max(5, int(caps.max_duration)))
+            self.duration.set_ceiling(max(5, int(caps.max_duration)))
             self.instrumental.setEnabled(caps.supports_vocals)
             if not caps.supports_vocals:
                 self.instrumental.setChecked(True)
@@ -334,8 +342,12 @@ class ComposePanel(QtWidgets.QWidget):
         total = seconds * max(1, self.variations.value())
         unit = f"{total:.0f}s" if total < 90 else f"{total / 60:.0f} min"
         count = self.variations.value()
+        # The estimate is built from the longest track the range allows, so it
+        # is a ceiling rather than an average -- say so instead of overshooting
+        # silently.
+        lead = "About" if self.duration.is_fixed() else "Up to about"
         text = (
-            f"About {unit} for {count} variation{'s' if count > 1 else ''} on "
+            f"{lead} {unit} for {count} variation{'s' if count > 1 else ''} on "
             f"{self.service.recommended_compute()}"
         )
         # A generation measured in tens of minutes is a decision, not a detail.
@@ -380,6 +392,10 @@ class ComposePanel(QtWidgets.QWidget):
     def build_request(self) -> GenerationRequest:
         seed = self.seed.value()
         key = self.key.currentText()
+        # The longest the range allows is the request's nominal duration, so
+        # anything reading it without going through the service (the estimate,
+        # for one) sees the worst case rather than the best.
+        low, high = self.duration.values()
         return GenerationRequest(
             prompt=self.prompt.toPlainText().strip(),
             model_id=self.model.currentData() or "builtin-composer",
@@ -387,7 +403,9 @@ class ComposePanel(QtWidgets.QWidget):
             style=self.style.currentData() or None,
             key=None if key == "Auto" else key,
             tempo=float(self.tempo.value()) if self.tempo.value() > 0 else None,
-            duration_seconds=float(self.duration.value()),
+            duration_seconds=float(high),
+            min_duration_seconds=float(low),
+            max_duration_seconds=float(high),
             structure=self.structure.currentData() or None,
             instrumental=self.instrumental.isChecked(),
             lyrics=self.lyrics.toPlainText().strip(),

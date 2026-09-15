@@ -22,7 +22,13 @@ from .catalog import Catalog, ModelEntry, load_catalog
 from .generator import Generator, GeneratorContext
 from .hardware import SystemInfo, detect_system, recommended_backend
 from .jobs import Job, JobQueue
-from .models import AudioBuffer, GenerationRequest, OutputFormat, Song
+from .models import (
+    AudioBuffer,
+    GenerationRequest,
+    OutputFormat,
+    Song,
+    resolve_durations,
+)
 from .registry import create_generator
 
 __all__ = ["AppService", "LibraryItem"]
@@ -129,10 +135,16 @@ class AppService:
 
         jobs: list[Job] = []
         count = max(1, int(request.variations or 1))
+        # Resolve the length range into one concrete length per variation here,
+        # so every generator can go on reading a single duration and none of
+        # them has to know the range existed.
+        caps = generator.capabilities()
+        lengths = resolve_durations(request, count, caps.max_duration or None)
         for i in range(count):
             variant = GenerationRequest.from_dict(request.to_dict())
             variant.model_id = model_id
             variant.variations = 1
+            variant.duration_seconds = lengths[i]
             # Give each variation its own seed so they differ but stay
             # reproducible from the seed the user seeded them with.
             if request.seed is not None:
@@ -158,10 +170,13 @@ class AppService:
 
         # Some jobs write their own output -- deconstruction produces a folder
         # of stems, not one file -- so take what they wrote rather than trying
-        # to re-derive a single artefact from it.
-        if result.paths:
-            self._record(job, result, list(result.paths))
-            return list(result.paths)
+        # to re-derive a single artefact from it. A job that wrote extra files
+        # *and* handed back audio (a remix keeping its stems, say) still goes
+        # through the normal export below; the extras are added to it.
+        extras = [Path(p) for p in result.paths]
+        if extras and result.audio is None and result.song is None:
+            self._record(job, result, extras)
+            return extras
 
         out_dir = self.settings.resolved_output_dir()
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -202,6 +217,7 @@ class AppService:
             if song is not None and self.settings.also_write_midi:
                 written.append(write_midi(song, out_dir / f"{stem}.mid"))
 
+        written.extend(extras)
         if written:
             self._record(job, result, written)
         return written

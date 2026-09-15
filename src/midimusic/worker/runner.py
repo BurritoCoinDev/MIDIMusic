@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import traceback
+from pathlib import Path
 
 PROTOCOL_VERSION = 1
 
@@ -302,6 +303,167 @@ def run_separate(req: dict) -> dict:
     return {"stems": written, "sample_rate": rate, "model": model_name, "device": device}
 
 
+def _midi_to_tracks(midi) -> list[dict]:
+    """Flatten a mido file into per-track note lists, timed in seconds.
+
+    Handing notes back rather than a MIDI file lets the application merge the
+    windows below and do its own grouping and writing, so the score that
+    reaches disk goes through the same writer as everything else.
+    """
+    import mido
+
+    ticks = midi.ticks_per_beat or 480
+    # One tempo for the whole file is all a transcriber emits; read it rather
+    # than assuming, but do not try to follow a tempo map that is not there.
+    tempo = 500000
+    for track in midi.tracks:
+        for msg in track:
+            if msg.type == "set_tempo":
+                tempo = msg.tempo
+                break
+
+    out = []
+    for track in midi.tracks:
+        program = 0
+        is_drum = False
+        open_notes: dict[tuple[int, int], tuple[float, int]] = {}
+        notes: list[list] = []
+        elapsed = 0.0
+        for msg in track:
+            elapsed += mido.tick2second(msg.time, ticks, tempo)
+            if msg.type == "program_change":
+                program = int(msg.program)
+            elif msg.type == "note_on" and msg.velocity > 0:
+                channel = int(getattr(msg, "channel", 0))
+                is_drum = is_drum or channel == 9
+                open_notes[(channel, msg.note)] = (elapsed, int(msg.velocity))
+            elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
+                channel = int(getattr(msg, "channel", 0))
+                started = open_notes.pop((channel, msg.note), None)
+                if started is not None:
+                    begin, velocity = started
+                    notes.append([int(msg.note), round(begin, 4),
+                                  round(max(0.02, elapsed - begin), 4), velocity])
+        # A window can end mid-note; give those a nominal length rather than
+        # dropping them, or every sustained string line loses its last chord.
+        for (_channel, pitch), (begin, velocity) in open_notes.items():
+            notes.append([int(pitch), round(begin, 4),
+                          round(max(0.05, elapsed - begin), 4), velocity])
+        if notes:
+            out.append({"name": track.name or "", "program": program,
+                        "is_drum": is_drum, "notes": sorted(notes, key=lambda n: n[1])})
+    return out
+
+
+def run_transcribe_score(req: dict) -> dict:
+    """Transcribe a recording into per-instrument note layers.
+
+    Long recordings are processed in windows: a film cue can run for minutes,
+    and a single pass would give no progress and an unbounded memory profile.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    device = _resolve_device(req.get("device", "auto"))
+    progress(0.02, "Locating the transcription model", "load")
+
+    checkpoint = req.get("checkpoint_path") or ""
+    if not checkpoint:
+        from huggingface_hub import snapshot_download
+
+        folder = snapshot_download(
+            repo_id=req.get("repo") or "mimbres/YourMT3",
+            revision=req.get("revision") or "main",
+            cache_dir=req.get("cache_dir") or None,
+            allow_patterns=list(req.get("files") or []) or None,
+            local_files_only=bool(req.get("offline")),
+            token=req.get("token") or None,
+        )
+        matches = sorted(Path(folder).rglob("*.ckpt"))
+        if not matches:
+            raise RuntimeError(f"No checkpoint found under {folder}")
+        checkpoint = str(matches[0])
+
+    progress(0.08, "Loading the transcription model", "load")
+    from mt3_infer import load_model
+
+    model = load_model(
+        req.get("model") or "yourmt3",
+        checkpoint_path=checkpoint,
+        device="cuda" if device not in ("cpu", "mps") else "cpu",
+        auto_download=False,
+    )
+
+    rate = 16000  # what the MT3 family is trained on
+    data, source_rate = sf.read(req["input_path"], dtype="float32", always_2d=True)
+    mono = data.mean(axis=1)
+    if source_rate != rate:
+        mono = _resample_to(mono, int(source_rate), rate)
+    limit = float(req.get("max_seconds") or 0)
+    if limit > 0:
+        mono = mono[: int(limit * rate)]
+
+    window = max(15.0, float(req.get("window_seconds", 45.0)))
+    step = int(window * rate)
+    total = max(1, int(np.ceil(len(mono) / step)))
+
+    merged: dict[tuple[str, int, bool], dict] = {}
+    for index in range(total):
+        chunk = mono[index * step: (index + 1) * step]
+        if chunk.size < rate // 2:
+            break
+        progress(0.1 + 0.85 * (index / total),
+                 f"Transcribing {index + 1} of {total}", "transcribe")
+        offset = index * step / rate
+        for track in _midi_to_tracks(model.transcribe(chunk, sr=rate)):
+            key = (track["name"], track["program"], track["is_drum"])
+            target = merged.setdefault(
+                key, {"name": track["name"], "program": track["program"],
+                      "is_drum": track["is_drum"], "notes": []}
+            )
+            for note in track["notes"]:
+                target["notes"].append([note[0], round(note[1] + offset, 4), note[2], note[3]])
+
+    tracks = sorted(merged.values(), key=lambda t: (-len(t["notes"]), t["program"]))
+    progress(1.0, "Done", "transcribe")
+    return {
+        "tracks": tracks,
+        "duration": round(len(mono) / rate, 3),
+        "device": device,
+        "checkpoint": checkpoint,
+        "windows": total,
+    }
+
+
+def _resample_to(mono, source_rate: int, rate: int):
+    """Rational resampling with whatever is available in this runtime."""
+    import numpy as np
+
+    try:
+        import soxr
+
+        return np.asarray(soxr.resample(mono, source_rate, rate), dtype=np.float32)
+    except ImportError:
+        pass
+    from math import gcd
+
+    divisor = gcd(source_rate, rate)
+    up, down = rate // divisor, source_rate // divisor
+    try:
+        from scipy.signal import resample_poly
+
+        return np.asarray(resample_poly(mono, up, down), dtype=np.float32)
+    except ImportError:
+        pass
+    # Last resort. Linear interpolation aliases, but a missing resampler must
+    # not mean a missing transcription.
+    length = int(len(mono) * rate / source_rate)
+    return np.interp(
+        np.linspace(0.0, len(mono) - 1, length, dtype=np.float64),
+        np.arange(len(mono)), mono,
+    ).astype(np.float32)
+
+
 def run_probe(_req: dict) -> dict:
     """Report what this runtime can actually do.
 
@@ -363,18 +525,29 @@ def run_probe(_req: dict) -> dict:
         info["torch_error"] = f"{type(exc).__name__}: {exc}"
         info["usable"] = False
 
-    for module in ("transformers", "diffusers", "acestep", "demucs", "soundfile", "numpy"):
+    for module in ("transformers", "diffusers", "acestep", "demucs", "mt3_infer",
+                   "soundfile", "numpy"):
         try:
             __import__(module)
             info[module] = True
         except Exception:
             info[module] = False
+
+    # The vendored multi-instrument transcriber uses transformers internals
+    # that 5.x removed, so the version matters as much as the package.
+    try:
+        import transformers
+
+        info["transformers_version"] = transformers.__version__
+    except Exception:
+        info["transformers_version"] = ""
     return info
 
 
 BACKENDS = {
     "probe": run_probe,
     "separate": run_separate,
+    "transcribe-score": run_transcribe_score,
     "hf-musicgen": run_musicgen,
     "diffusers-audio": run_stable_audio,
     "ace-step": run_ace_step,

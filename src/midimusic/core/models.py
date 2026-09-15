@@ -7,6 +7,7 @@ speaks these types, so adding a backend never changes the rest of the app.
 
 from __future__ import annotations
 
+import random
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -24,6 +25,7 @@ __all__ = [
     "Progress",
     "Song",
     "Track",
+    "resolve_durations",
 ]
 
 
@@ -163,8 +165,15 @@ class GenerationRequest:
     style: str | None = None
     key: str | None = None
     tempo: float | None = None
-    duration_seconds: float | None = 60.0
     structure: str | None = None
+
+    # Length. ``duration_seconds`` is the resolved target every generator
+    # reads; the range is what the user asked for, and the service draws each
+    # variation's length from it before the job runs. Leaving the range unset
+    # means "exactly duration_seconds".
+    duration_seconds: float | None = 60.0
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
     instrumental: bool = True
     lyrics: str = ""
 
@@ -216,3 +225,54 @@ class GenerationResult:
     @property
     def ok(self) -> bool:
         return not self.error and (self.song is not None or self.audio is not None or bool(self.paths))
+
+
+def resolve_durations(
+    request: GenerationRequest, count: int = 1, cap: float | None = None
+) -> list[float | None]:
+    """Pick a concrete length for each variation of ``request``.
+
+    Someone who asks for tracks between 90 and 180 seconds means each one to
+    land somewhere in that band -- so the lengths are spread across the range
+    rather than drawn independently. Independent draws cluster, and two
+    variations that come out the same length waste the point of asking for a
+    range at all.
+
+    ``cap`` is the backend's ceiling. It clamps the range rather than
+    overriding it, so a model that can only manage 30 seconds quietly produces
+    30 instead of failing.
+    """
+    count = max(1, int(count))
+    low, high = request.min_duration_seconds, request.max_duration_seconds
+
+    if low is None and high is None:
+        target = request.duration_seconds
+        if target is not None and cap:
+            target = min(float(target), float(cap))
+        return [target] * count
+
+    fallback = request.duration_seconds
+    if low is None:
+        low = fallback if fallback is not None else high
+    if high is None:
+        high = fallback if fallback is not None else low
+    low, high = float(low), float(high)
+    if low > high:
+        low, high = high, low
+    if cap:
+        low, high = min(low, float(cap)), min(high, float(cap))
+
+    span = high - low
+    if span < 1.0:
+        return [round(high, 1)] * count
+
+    rng = random.Random(request.seed) if request.seed is not None else random.Random()
+    out: list[float | None] = []
+    for i in range(count):
+        # One slice of the range each, jittered within that slice: the lengths
+        # stay distinct and none of them can leave the band.
+        slice_width = span / count
+        centre = low + slice_width * (i + 0.5)
+        jitter = slice_width * 0.5 * (rng.random() * 2.0 - 1.0)
+        out.append(round(min(high, max(low, centre + jitter)), 1))
+    return out

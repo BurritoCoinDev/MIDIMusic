@@ -122,6 +122,9 @@ class DeconstructGenerator(Generator):
     def estimated_seconds(self, request: GenerationRequest, ctx: GeneratorContext) -> float:
         source = request.extra.get("input_path")
         duration = _probe_duration(source) if source else 180.0
+        limit = float(request.extra.get("max_seconds") or 0)
+        if limit > 0:
+            duration = min(duration, limit)
         info = _probe()
         on_gpu = bool(info.get("cuda"))
         # Separation is roughly real-time on a GPU and several times slower on
@@ -152,12 +155,15 @@ class DeconstructGenerator(Generator):
 
         with tempfile.TemporaryDirectory(prefix="midimusic-stems-") as tmp:
             ctx.report(0.02, f"Separating {source.name}", "separate")
+            # Separating six minutes of audio on a CPU is a long wait, so let
+            # the caller ask for only the opening of a long recording.
+            separate_from = _trim_source(source, request.extra.get("max_seconds"), Path(tmp))
             try:
                 worker = run_worker(
                     {
                         "cmd": "separate",
                         "model": model,
-                        "input_path": str(source),
+                        "input_path": str(separate_from),
                         "output_dir": tmp,
                         "device": ctx.device,
                     },
@@ -218,7 +224,7 @@ class DeconstructGenerator(Generator):
 
             if want_analysis:
                 ctx.report(0.96, "Analysing tempo and key", "analyse")
-                mix, mix_rate = sf.read(str(source), dtype="float32", always_2d=True)
+                mix, mix_rate = sf.read(str(separate_from), dtype="float32", always_2d=True)
                 result.analysis = analyze_audio(mix, int(mix_rate))
 
         ctx.report(1.0, "Done", "deconstruct")
@@ -285,6 +291,28 @@ def _probe() -> dict:
         return probe_runtime()
     except Exception:
         return {}
+
+
+def _trim_source(source: Path, max_seconds, folder: Path) -> Path:
+    """The recording, or its opening, as a file the worker can read."""
+    try:
+        limit = float(max_seconds or 0)
+    except (TypeError, ValueError):
+        return source
+    if limit <= 0:
+        return source
+    try:
+        info = sf.info(str(source))
+        if info.frames <= limit * info.samplerate:
+            return source
+        data, rate = sf.read(str(source), frames=int(limit * info.samplerate),
+                             dtype="float32", always_2d=True)
+        clipped = folder / f"{source.stem}-trimmed.wav"
+        sf.write(str(clipped), data, int(rate), subtype="FLOAT")
+        return clipped
+    except Exception:
+        log.exception("could not trim %s; separating the whole recording", source)
+        return source
 
 
 def _probe_duration(path: str | Path) -> float:

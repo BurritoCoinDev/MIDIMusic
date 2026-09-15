@@ -20,6 +20,8 @@ coverage.xml
 /out/
 /models/
 /scratch/
+# Model checkpoints a transcription library caches beside the working directory.
+.mt3_checkpoints/
 settings.json
 settings.local.json
 models.user.json

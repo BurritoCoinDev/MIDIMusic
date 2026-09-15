@@ -11,7 +11,12 @@ from midimusic.core.catalog import ModelEntry, load_catalog, save_user_model
 from midimusic.core.generator import GeneratorContext
 from midimusic.core.hardware import GPU, Vendor, _gfx_for, apply_runtime_probe, detect_system
 from midimusic.core.jobs import JobQueue
-from midimusic.core.models import GenerationRequest, JobStatus, OutputFormat
+from midimusic.core.models import (
+    GenerationRequest,
+    JobStatus,
+    OutputFormat,
+    resolve_durations,
+)
 from midimusic.core.registry import ADAPTERS, available_generators, create_generator
 from midimusic.core.runtime import RUNTIME_OPTIONS, options_for, resolve_packages
 from midimusic.prompt.parser import parse_prompt
@@ -218,6 +223,24 @@ class TestService:
         names = {j.output_paths[0].name for j in jobs}
         assert len(names) == 3
 
+    def test_a_length_range_is_resolved_before_the_job_runs(self, service):
+        jobs = service.submit(
+            GenerationRequest(prompt="pop", output_format=OutputFormat.MIDI,
+                              min_duration_seconds=20, max_duration_seconds=40,
+                              seed=3, variations=3),
+            "builtin-composer",
+        )
+        lengths = [j.request.duration_seconds for j in jobs]
+        assert all(20 <= n <= 40 for n in lengths)
+        assert len(set(lengths)) == 3
+        _wait(jobs, limit=400)
+        assert all(j.status is JobStatus.DONE for j in jobs)
+        # The music is as long as it was asked to be, not merely requested so.
+        for job in jobs:
+            assert job.result.song.duration_seconds == pytest.approx(
+                job.request.duration_seconds, rel=0.35
+            )
+
     def test_unknown_model_falls_back_rather_than_failing(self, service):
         jobs = service.submit(
             GenerationRequest(prompt="x", output_format=OutputFormat.MIDI,
@@ -226,6 +249,44 @@ class TestService:
         )
         _wait(jobs)
         assert jobs[0].status is JobStatus.DONE
+
+
+class TestDurationRange:
+    def test_no_range_leaves_the_duration_alone(self):
+        request = GenerationRequest(duration_seconds=60)
+        assert resolve_durations(request, 3) == [60, 60, 60]
+
+    def test_none_stays_none(self):
+        assert resolve_durations(GenerationRequest(duration_seconds=None), 2) == [None, None]
+
+    def test_lengths_are_spread_across_the_range(self):
+        request = GenerationRequest(min_duration_seconds=60,
+                                    max_duration_seconds=180, seed=11)
+        lengths = resolve_durations(request, 4)
+        assert all(60 <= n <= 180 for n in lengths)
+        assert len(set(lengths)) == 4
+        # Spread, not clustered: four slices of a two-minute band cannot all
+        # land within a few seconds of each other.
+        assert max(lengths) - min(lengths) > 40
+
+    def test_the_same_seed_gives_the_same_lengths(self):
+        request = GenerationRequest(min_duration_seconds=30,
+                                    max_duration_seconds=90, seed=4)
+        assert resolve_durations(request, 3) == resolve_durations(request, 3)
+
+    def test_a_reversed_range_is_still_honoured(self):
+        request = GenerationRequest(min_duration_seconds=180,
+                                    max_duration_seconds=60, seed=2)
+        assert all(60 <= n <= 180 for n in resolve_durations(request, 3))
+
+    def test_a_backend_ceiling_clamps_the_range(self):
+        request = GenerationRequest(min_duration_seconds=60,
+                                    max_duration_seconds=300, seed=1)
+        assert resolve_durations(request, 3, cap=30.0) == [30.0, 30.0, 30.0]
+
+    def test_a_degenerate_range_is_a_fixed_length(self):
+        request = GenerationRequest(min_duration_seconds=45, max_duration_seconds=45)
+        assert resolve_durations(request, 4) == [45.0] * 4
 
 
 class TestHardware:
@@ -276,6 +337,108 @@ def _wait(jobs, limit: int = 200) -> None:
         if all(j.is_terminal for j in jobs):
             return
         time.sleep(0.05)
+
+
+class TestOrchestralScore:
+    """Turning a recording into per-section MIDI, rather than audio stems."""
+
+    def _tracks(self):
+        # (program, is_drum, note count) covering one instrument per section.
+        return [
+            {"name": "Strings", "program": 48, "is_drum": False,
+             "notes": [[60, 0.0, 1.0, 90], [64, 1.0, 1.0, 88]]},
+            {"name": "Brass", "program": 60, "is_drum": False,
+             "notes": [[55, 0.5, 0.5, 100]]},
+            {"name": "Reed", "program": 71, "is_drum": False,
+             "notes": [[72, 0.0, 0.25, 70]]},
+            {"name": "Drums", "program": 0, "is_drum": True,
+             "notes": [[36, 0.0, 0.1, 110], [38, 0.5, 0.1, 100]]},
+            {"name": "Piano", "program": 0, "is_drum": False,
+             "notes": [[48, 0.0, 2.0, 80]]},
+        ]
+
+    def test_layers_are_grouped_by_section(self):
+        from midimusic.core.score import build_sections
+
+        layers, _full = build_sections(self._tracks(), tempo=120.0, title="Cue")
+        names = [layer.name for layer in layers]
+        assert names == ["Woodwinds", "Brass", "Percussion", "Keyboards", "Strings"]
+
+    def test_the_full_score_is_in_conductors_order(self):
+        from midimusic.core.score import build_sections
+
+        _layers, full = build_sections(self._tracks(), tempo=120.0)
+        # Woodwinds at the top of the page, strings at the bottom, as printed.
+        assert [t.name for t in full.tracks][0] == "Reeds"
+        assert [t.name for t in full.tracks][-1] == "Ensemble"
+        assert full.note_count == 7
+
+    def test_percussion_keeps_the_drum_channel(self):
+        from midimusic.core.score import build_sections
+
+        _layers, full = build_sections(self._tracks(), tempo=120.0)
+        drums = [t for t in full.tracks if t.is_drum]
+        assert drums and all(t.channel == 9 for t in drums)
+        assert all(t.channel != 9 for t in full.tracks if not t.is_drum)
+
+    def test_seconds_become_beats_at_the_detected_tempo(self):
+        from midimusic.core.score import build_sections
+
+        # At 120 bpm a note one second in starts on beat two.
+        _layers, full = build_sections(self._tracks(), tempo=120.0)
+        strings = next(t for t in full.tracks if t.name == "Ensemble")
+        assert strings.notes[1].start == pytest.approx(2.0)
+
+        # The same notes at 60 bpm land half as far along.
+        _layers, slower = build_sections(self._tracks(), tempo=60.0)
+        strings = next(t for t in slower.tracks if t.name == "Ensemble")
+        assert strings.notes[1].start == pytest.approx(1.0)
+
+    def test_silent_tracks_are_dropped(self):
+        from midimusic.core.score import build_sections
+
+        layers, full = build_sections(
+            [{"name": "Empty", "program": 40, "is_drum": False, "notes": []}], tempo=120.0
+        )
+        assert layers == [] and full.tracks == []
+
+    def test_the_catalog_entry_fetches_only_its_own_checkpoint(self):
+        entry = load_catalog().get("yourmt3-orchestral")
+        assert entry is not None
+        # The repo holds five checkpoints; pulling all of them would be several
+        # gigabytes for a model that needs one.
+        assert len(entry.files) == 1
+        assert entry.files[0].endswith(".ckpt")
+        assert entry.outputs == ("midi",)
+
+    def test_it_asks_for_a_transformers_it_can_actually_use(self):
+        # The vendored transcriber uses internals that transformers 5 removed,
+        # so the pin is part of what the model needs, not a nicety.
+        generator = create_generator(load_catalog().get("yourmt3-orchestral"))
+        assert "transformers<5" in generator.required_packages()
+
+
+class TestModelPackages:
+    def test_torch_is_never_reinstalled_from_pypi(self):
+        from midimusic.core.runtime import model_packages
+
+        # Doing so would replace a vendor ROCm or CUDA build with a CPU one.
+        assert model_packages(["torch", "demucs"]) == ("demucs",)
+        assert model_packages(["torch[device-gfx1100]", "diffusers"]) == ("diffusers",)
+
+    def test_version_pins_survive(self):
+        from midimusic.core.runtime import model_packages
+
+        assert model_packages(["torch", "transformers<5"]) == ("transformers<5",)
+
+    def test_every_catalog_model_names_installable_libraries(self):
+        from midimusic.core.runtime import model_packages
+
+        for entry in load_catalog().models:
+            if entry.is_builtin:
+                continue
+            assert entry.extras, f"{entry.id} lists no libraries"
+            assert model_packages(entry.extras), f"{entry.id} needs only torch?"
 
 
 class TestBootstrap:

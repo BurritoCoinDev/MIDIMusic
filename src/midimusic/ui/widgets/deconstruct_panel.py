@@ -93,9 +93,9 @@ class DeconstructPanel(QtWidgets.QWidget):
         layout.addWidget(title)
 
         blurb = QtWidgets.QLabel(
-            "Split a recording into its layers. Each layer is written as audio, "
-            "and the pitched ones can also be transcribed to MIDI — which works "
-            "far better on an isolated part than on a full mix."
+            "Take a recording apart. A band splits into audio stems; an orchestral "
+            "or film score splits into MIDI layers by section, because separation "
+            "has little to grip on when there is no drum kit and no bass guitar."
         )
         blurb.setProperty("role", "dim")
         blurb.setWordWrap(True)
@@ -150,14 +150,41 @@ class DeconstructPanel(QtWidgets.QWidget):
         self.vocal_note.setWordWrap(True)
         form.addRow("", self.vocal_note)
 
+        self.score_note = QtWidgets.QLabel(
+            "Transcribes the whole recording into one MIDI layer per section. It "
+            "resolves instrument families, so you get the string body rather than "
+            "first and second violins, and the result is an estimate of the score "
+            "rather than the score itself."
+        )
+        self.score_note.setProperty("role", "dim")
+        self.score_note.setWordWrap(True)
+        form.addRow("", self.score_note)
+
         self.analyse = QtWidgets.QCheckBox("Estimate tempo and key")
         self.analyse.setChecked(True)
+        self.analyse.setToolTip(
+            "The tempo is also used to time the MIDI, so bars line up in a DAW."
+        )
         form.addRow("", self.analyse)
 
         self.format = QtWidgets.QComboBox()
         self.format.addItem("FLAC (lossless)", OutputFormat.FLAC.value)
         self.format.addItem("WAV", OutputFormat.WAV.value)
-        form.addRow("Stem format", self.format)
+        self.format_label = QtWidgets.QLabel("Stem format")
+        form.addRow(self.format_label, self.format)
+
+        self.limit = QtWidgets.QSpinBox()
+        self.limit.setRange(0, 3600)
+        self.limit.setSingleStep(30)
+        self.limit.setValue(0)
+        self.limit.setSuffix(" s")
+        self.limit.setSpecialValueText("Whole recording")
+        self.limit.valueChanged.connect(self._update_state)
+        self.limit.setToolTip(
+            "Stop after this much of the recording. Useful on a CPU, where a "
+            "six-minute cue takes a while."
+        )
+        form.addRow("Process", self.limit)
 
         box.addLayout(form)
 
@@ -177,6 +204,7 @@ class DeconstructPanel(QtWidgets.QWidget):
         self.estimate.setProperty("role", "dim")
         row.addWidget(self.estimate, 1)
         self.go = QtWidgets.QPushButton("Deconstruct")
+        self.go.setToolTip("Queue this recording for deconstruction")
         self.go.setProperty("role", "primary")
         self.go.setMinimumWidth(150)
         self.go.clicked.connect(self.submit)
@@ -188,10 +216,15 @@ class DeconstructPanel(QtWidgets.QWidget):
     def _refresh_models(self) -> None:
         self.model.blockSignals(True)
         self.model.clear()
-        for entry in self.service.catalog.by_kind("separator"):
-            self.model.addItem(entry.name, entry.id)
+        for kind in ("separator", "transcriber"):
+            for entry in self.service.catalog.by_kind(kind):
+                self.model.addItem(entry.name, entry.id)
         self.model.blockSignals(False)
         self._on_model_changed()
+
+    def current_kind(self) -> str:
+        entry = self.current_model()
+        return entry.kind if entry else "separator"
 
     def current_model(self) -> ModelEntry | None:
         model_id = self.model.currentData()
@@ -202,7 +235,15 @@ class DeconstructPanel(QtWidgets.QWidget):
         if entry is None:
             self.stem_summary.setText("")
             return
-        self.stem_summary.setText("Produces: " + ", ".join(entry.stems))
+        separating = entry.kind == "separator"
+        self.stem_summary.setText(
+            ("Audio stems: " if separating else "MIDI layers: ") + ", ".join(entry.stems)
+        )
+        # The two paths produce different things, so the controls that only
+        # apply to one of them go away rather than sitting there inert.
+        for widget in (self.transcribe, self.format, self.format_label):
+            widget.setVisible(separating)
+        self.score_note.setVisible(not separating)
         self._update_state()
 
     def set_source(self, path: str) -> None:
@@ -223,9 +264,10 @@ class DeconstructPanel(QtWidgets.QWidget):
 
     def _update_state(self) -> None:
         entry = self.current_model()
+        separating = entry.kind == "separator" if entry else True
         has_source = self._source is not None and self._source.exists()
         self.go.setEnabled(has_source and entry is not None)
-        self.vocal_note.setVisible(self.transcribe.isChecked())
+        self.vocal_note.setVisible(separating and self.transcribe.isChecked())
 
         warnings: list[str] = []
         if entry is not None:
@@ -235,7 +277,7 @@ class DeconstructPanel(QtWidgets.QWidget):
                 warnings.append(
                     f"Needs: {', '.join(missing)}. Install a compute runtime from the Models tab."
                 )
-        if self.transcribe.isChecked():
+        if separating and self.transcribe.isChecked():
             from ..._version_probe import transcription_available
 
             if not transcription_available():
@@ -262,16 +304,21 @@ class DeconstructPanel(QtWidgets.QWidget):
     # -- submit -------------------------------------------------------------
 
     def build_request(self) -> GenerationRequest:
+        separating = self.current_kind() == "separator"
+        fmt = OutputFormat(self.format.currentData() or OutputFormat.FLAC.value) \
+            if separating else OutputFormat.MIDI
+        verb = "deconstruct" if separating else "transcribe"
         return GenerationRequest(
-            prompt=f"deconstruct {self._source.name}" if self._source else "deconstruct",
+            prompt=f"{verb} {self._source.name}" if self._source else verb,
             model_id=self.model.currentData() or "demucs-htdemucs",
-            output_format=OutputFormat(self.format.currentData() or OutputFormat.FLAC.value),
+            output_format=fmt,
             duration_seconds=None,
             extra={
                 "input_path": str(self._source) if self._source else "",
                 "output_dir": str(self.service.settings.resolved_output_dir()),
                 "transcribe": self.transcribe.isChecked(),
                 "analyse": self.analyse.isChecked(),
+                "max_seconds": float(self.limit.value()),
                 "sample_rate": self.service.settings.sample_rate,
                 "bit_depth": self.service.settings.bit_depth,
             },

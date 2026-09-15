@@ -7,7 +7,7 @@ from PySide6 import QtCore, QtWidgets
 from ...config.paths import human_bytes
 from ...core.catalog import ModelEntry
 from ...core.downloader import download_model, local_size, model_is_present, remove_model
-from ...core.runtime import install_runtime, options_for
+from ...core.runtime import install_packages, install_runtime, model_packages, options_for
 from ...core.service import AppService
 
 __all__ = ["ModelsPanel"]
@@ -88,6 +88,12 @@ class ModelCard(QtWidgets.QFrame):
         self.action.setProperty("role", "primary")
         self.action.clicked.connect(self._on_action)
         buttons.addWidget(self.action)
+        self.support = QtWidgets.QPushButton("Install support")
+        self.support.setToolTip(
+            "Install the Python libraries this model needs into the compute runtime"
+        )
+        self.support.clicked.connect(self._on_support)
+        buttons.addWidget(self.support)
         self.remove = QtWidgets.QPushButton("Remove")
         self.remove.setProperty("role", "danger")
         self.remove.clicked.connect(self._on_remove)
@@ -107,6 +113,12 @@ class ModelCard(QtWidgets.QFrame):
         models_dir = self.service.settings.resolved_models_dir()
         generator = self.service.generator_for(entry.id)[1]
         missing = generator.missing_packages() if generator else ["adapter"]
+
+        # Libraries are a separate question from weights: a model can be fully
+        # downloaded and still unusable because its Python package is missing,
+        # and telling someone that without offering the fix is no help.
+        installable = model_packages(entry.extras)
+        self.support.setVisible(bool(missing and installable))
 
         if not entry.needs_download:
             # Nothing to fetch or delete for a built-in backend, so offer neither.
@@ -153,6 +165,22 @@ class ModelCard(QtWidgets.QFrame):
             on_finished=lambda h: self._bridge.finished.emit(h.error or ""),
         )
 
+    def _on_support(self) -> None:
+        packages = model_packages(self.entry.extras)
+        if not packages:
+            return
+        if self._handle is not None and not self._handle.done:
+            self._handle.stop()
+            return
+        self.support.setText("Installing")
+        self.support.setEnabled(False)
+        self.status.setText("Installing " + ", ".join(packages))
+        self._handle = install_packages(
+            packages,
+            on_line=lambda line: self._bridge.progress.emit(-1.0, line),
+            on_finished=lambda h: self._bridge.finished.emit(h.error or ""),
+        )
+
     def _on_remove(self) -> None:
         answer = QtWidgets.QMessageBox.question(
             self, "Remove model", f"Delete the downloaded files for {self.entry.name}?",
@@ -165,13 +193,23 @@ class ModelCard(QtWidgets.QFrame):
 
     @QtCore.Slot(float, str)
     def _on_progress(self, fraction: float, message: str) -> None:
-        self.progress.setValue(int(fraction * 100))
+        # A package install streams lines rather than a fraction, and says so
+        # by reporting a negative one.
+        if fraction >= 0:
+            self.progress.setValue(int(fraction * 100))
         self.status.setText(message)
 
     @QtCore.Slot(str)
     def _on_finished(self, error: str) -> None:
         self.progress.setVisible(False)
         self._handle = None
+        self.support.setText("Install support")
+        self.support.setEnabled(True)
+        # A fresh probe, or the card would go on reporting the packages the
+        # install just added as missing.
+        from ...core.worker_client import probe_runtime
+
+        probe_runtime(refresh=True)
         if error:
             self.status.setText(error)
             self.status.setProperty("role", "error")

@@ -281,6 +281,50 @@
       "license_note": "Generator weights badge Apache-2.0, but the required DiffRhythm-vae is under the Stability Community License, and DiffRhythm-1_2 declares no licence at all. Treat the whole pipeline as non-Apache until upstream clarifies."
     },
     {
+      "id": "yourmt3-orchestral",
+      "name": "Orchestral score (YourMT3+)",
+      "kind": "transcriber",
+      "adapter": "score",
+      "repo": "mimbres/YourMT3",
+      "files": [
+        "logs/2024/mc13_256_g4_all_v7_mt3f_sqr_rms_moe_wf4_n8k2_silu_rope_rp_b36_nops/checkpoints/last.ckpt"
+      ],
+      "license": "Apache-2.0",
+      "commercial_use": true,
+      "size_gb": 0.56,
+      "vram_gb": 6.0,
+      "devices": [
+        "cuda",
+        "rocm",
+        "cpu"
+      ],
+      "tier": 1,
+      "flagship": true,
+      "outputs": [
+        "midi"
+      ],
+      "vocals": true,
+      "sample_rate": 16000,
+      "max_duration": 1800,
+      "extras": [
+        "mt3-infer",
+        "transformers<5"
+      ],
+      "stems": [
+        "Woodwinds",
+        "Brass",
+        "Percussion",
+        "Keyboards",
+        "Voice",
+        "Guitars",
+        "Synths",
+        "Strings",
+        "Bass"
+      ],
+      "description": "Writes a recording out as a score: one MIDI layer per orchestral section -- strings, brass, woodwinds, percussion, keyboards and voice.",
+      "notes": "Built for orchestral and film music, where stem separation has little to work with. It resolves instrument families, not individual desks, so you get the string body rather than first and second violins. Roughly twice real time on CPU. Needs transformers 4.x in the runtime."
+    },
+    {
       "id": "demucs-htdemucs",
       "name": "Demucs (4 stems)",
       "kind": "separator",

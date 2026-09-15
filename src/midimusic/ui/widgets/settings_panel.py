@@ -9,6 +9,7 @@ from PySide6 import QtCore, QtWidgets
 from ...config.paths import disk_free, get_paths, human_bytes
 from ...config.settings import save_settings
 from ...core.service import AppService
+from .duration_range import DurationRange
 
 __all__ = ["SettingsPanel"]
 
@@ -171,11 +172,15 @@ class SettingsPanel(QtWidgets.QWidget):
         # -- defaults -------------------------------------------------------
         defaults = QtWidgets.QGroupBox("Generation defaults")
         d_form = QtWidgets.QFormLayout(defaults)
-        self.default_duration = QtWidgets.QSpinBox()
-        self.default_duration.setRange(5, 900)
-        self.default_duration.setSuffix(" s")
-        self.default_duration.setValue(settings.default_duration)
+        self.default_duration = DurationRange(*settings.duration_range())
         d_form.addRow("Length", self.default_duration)
+        self.length_note = QtWidgets.QLabel(self.default_duration.describe())
+        self.length_note.setProperty("role", "dim")
+        self.length_note.setWordWrap(True)
+        self.default_duration.changed.connect(
+            lambda: self.length_note.setText(self.default_duration.describe())
+        )
+        d_form.addRow("", self.length_note)
 
         self.default_variations = QtWidgets.QSpinBox()
         self.default_variations.setRange(1, 8)
@@ -274,7 +279,10 @@ class SettingsPanel(QtWidgets.QWidget):
         s.device = str(self.device.currentData())
         s.hf_token = self.hf_token.text().strip()
         s.offline = self.offline.isChecked()
-        s.default_duration = int(self.default_duration.value())
+        s.default_min_duration, s.default_max_duration = self.default_duration.values()
+        # Keep the single-length field in step so a downgrade, or anything
+        # still reading it, sees a sane value rather than a stale one.
+        s.default_duration = s.default_max_duration
         s.default_variations = int(self.default_variations.value())
         s.default_complexity = self.default_complexity.value() / 100.0
         save_settings(s)

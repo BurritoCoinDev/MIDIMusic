@@ -32,6 +32,7 @@ ADAPTERS: dict[str, str] = {
     "hf-anticipatory": "midimusic.generators.symbolic_hf:AnticipatoryGenerator",
     "onnx-midi": "midimusic.generators.symbolic_onnx:OnnxMidiGenerator",
     "demucs": "midimusic.core.deconstruct:DeconstructGenerator",
+    "score": "midimusic.core.score:ScoreGenerator",
 }
 
 # The original in-process adapters, kept for development and for anyone who

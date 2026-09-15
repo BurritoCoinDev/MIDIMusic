@@ -28,6 +28,7 @@ So MIDIMusic runs both:
 | An editable score | The built-in composer or a symbolic model → MIDI |
 | Audio *and* a rough score | Audio model → FLAC, then transcription → MIDI |
 | A song you already have, taken apart | Deconstruct → per-layer FLAC and MIDI |
+| An orchestral or film cue, taken apart | Deconstruct → per-section MIDI |
 
 The transcription bridge (basic-pitch) is honest about what it is: good on
 sparse or solo material, rough on dense mixes. It is a starting point, not a
@@ -62,6 +63,39 @@ one and sounding certain.
 
 Separation uses Demucs (MIT), so unlike some of the generation models there is
 no non-commercial clause on what comes out.
+
+### Orchestral and film scores
+
+Stem separation has almost nothing to grip on in a film cue. Demucs was trained
+on bands: it looks for a drum kit, a bass guitar and a lead vocal, and when a
+recording has none of those, the entire orchestra arrives in one "other" stem.
+
+So orchestral material takes a different route. **Orchestral score (YourMT3+)**
+transcribes the recording directly into notes tagged by instrument, and those
+are grouped into the sections a score is written in:
+
+```
+Cue score/
+  full score.mid      every part, in conductor's order
+  Woodwinds.mid
+  Brass.mid
+  Percussion.mid
+  Keyboards.mid
+  Voice.mid
+  Strings.mid
+```
+
+The full score is ordered the way a printed one is — woodwinds at the top of
+the page, strings at the bottom — and timed to the recording's detected tempo,
+so the bars line up when you open it in a DAW.
+
+The honest limit: it resolves instrument *families*, not individual desks. You
+get the string body, not the first and second violins; the brass section, not
+the third horn. Layers are named for the family for that reason. It is an
+estimate of the score, not the score.
+
+Apache-2.0 weights, about 560 MB, and roughly twice real time on a CPU. It runs
+on the whole mix rather than on stems, so there is no separation step first.
 
 ---
 
@@ -187,6 +221,18 @@ tempo, mood and length, and it shows you its reading so you can correct it.
 Anything you set explicitly overrides the prompt. Complexity is a dial from a
 sparse trio to a fully-produced arrangement.
 
+Length is a **range**, not a single number. Set 90 to 180 seconds and every
+track lands somewhere in that band; ask for four variations and the lengths are
+spread across it rather than drawn at random, so you do not get two takes of
+almost exactly the same length. Set both ends the same for a fixed length. A
+model that cannot go past thirty seconds quietly clamps the range instead of
+failing, and the time estimate is quoted for the longest track the range
+allows.
+
+**Deconstruct** — drop in a recording and take it apart, as audio stems or as
+an orchestral score. The length limit stops after the opening of a long cue,
+which matters on a CPU.
+
 **Queue** — generation runs one job at a time in the background, with live
 progress and a cancel button. The window stays responsive.
 
@@ -197,7 +243,8 @@ playback, and reveal-in-folder.
 carries, and your compute runtime.
 
 **Settings** — output folder, model folder (movable to another drive), sample
-rate, bit depth, loudness target, and a Hugging Face token for gated models.
+rate, bit depth, loudness target, default length range, and a Hugging Face
+token for gated models.
 
 ---
 

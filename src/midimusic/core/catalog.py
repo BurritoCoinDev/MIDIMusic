@@ -45,6 +45,9 @@ class ModelEntry:
     sample_rate: int = 44100
     max_duration: float = 60.0
     extras: tuple[str, ...] = ()
+    # Specific paths to fetch, when a repo holds more than this model needs.
+    # Empty means the whole repo.
+    files: tuple[str, ...] = ()
     env: dict[str, str] = field(default_factory=dict)
     incompatible: tuple[str, ...] = ()
     requires_binary: tuple[str, ...] = ()
@@ -99,7 +102,7 @@ class ModelEntry:
         for key, value in d.items():
             if key not in known:
                 continue
-            if key in ("devices", "outputs", "extras", "incompatible",
+            if key in ("devices", "outputs", "extras", "files", "incompatible",
                        "requires_binary", "stems"):
                 value = tuple(value or ())
             clean[key] = value

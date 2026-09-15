@@ -20,7 +20,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__all__ = ["RUNTIME_OPTIONS", "InstallHandle", "RuntimeOption", "install_runtime", "options_for"]
+__all__ = [
+    "RUNTIME_OPTIONS",
+    "InstallHandle",
+    "RuntimeOption",
+    "install_packages",
+    "install_runtime",
+    "options_for",
+]
 
 log = logging.getLogger(__name__)
 
@@ -244,5 +251,84 @@ def install_runtime(
                     log.exception("install finished callback failed")
 
     handle.thread = threading.Thread(target=run, name="runtime-install", daemon=True)
+    handle.thread.start()
+    return handle
+
+
+# A package the runtime option itself installs, so a model asking for it again
+# would risk replacing a vendor GPU build with a generic PyPI one.
+_TORCH_PACKAGES = frozenset({"torch", "torchaudio", "torchvision"})
+
+
+def model_packages(extras: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """The packages a model needs that installing torch does not already give.
+
+    torch itself is filtered out deliberately: it comes from the vendor index
+    with the right GPU build, and reinstalling it from PyPI would quietly
+    replace a ROCm or CUDA build with a CPU one.
+    """
+    out = []
+    for package in extras or ():
+        name = str(package).split("[")[0].split("<")[0].split(">")[0].split("=")[0].strip()
+        if name and name not in _TORCH_PACKAGES:
+            out.append(str(package))
+    return tuple(dict.fromkeys(out))
+
+
+def install_packages(
+    packages: tuple[str, ...] | list[str],
+    on_line: Callable[[str], None] | None = None,
+    on_finished: Callable[[InstallHandle], None] | None = None,
+    python_executable: str | None = None,
+) -> InstallHandle:
+    """Install a model's own libraries into the compute runtime.
+
+    Separate from :func:`install_runtime` because these are per-model: a user
+    who only wants to take songs apart should not have to install a music
+    generator's dependencies to do it.
+    """
+    option = RuntimeOption(id="packages", name="Model libraries",
+                           description="Libraries a model needs", packages=tuple(packages))
+    handle = InstallHandle(option=option)
+
+    def emit(line: str) -> None:
+        handle.lines.append(line)
+        if on_line is not None:
+            try:
+                on_line(line)
+            except Exception:
+                log.exception("install output callback failed")
+
+    def run() -> None:
+        try:
+            from .bootstrap import create_runtime, uv_pip_install
+
+            target = Path(python_executable) if python_executable else create_runtime(on_line=emit)
+            emit(f"Using {target}")
+            handle._process = uv_pip_install(list(packages), target, on_line=emit)
+            if handle._process is None:
+                raise RuntimeError("The environment builder is unavailable.")
+            for line in handle._process.stdout or []:
+                if handle._cancel.is_set():
+                    handle._process.terminate()
+                    break
+                emit(line.rstrip())
+            handle.returncode = handle._process.wait()
+            if handle._cancel.is_set():
+                handle.error = "Cancelled"
+            elif handle.returncode != 0:
+                handle.error = f"Installation failed with code {handle.returncode}"
+        except Exception as exc:
+            handle.error = f"{type(exc).__name__}: {exc}"
+            log.exception("package install failed")
+        finally:
+            handle.done = True
+            if on_finished is not None:
+                try:
+                    on_finished(handle)
+                except Exception:
+                    log.exception("install finished callback failed")
+
+    handle.thread = threading.Thread(target=run, name="package-install", daemon=True)
     handle.thread.start()
     return handle
