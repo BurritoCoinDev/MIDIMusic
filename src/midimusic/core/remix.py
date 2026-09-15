@@ -234,7 +234,7 @@ class RemixGenerator(Generator):
             bed = dsp.match_loudness(bed, reference, rate)
 
             layers = [dsp.to_stereo(layer)[:frames] for layer in kept]
-            mixed = dsp.mix(layers + [bed[:frames]])
+            mixed = dsp.mix([*layers, bed[:frames]])
             buffer = AudioBuffer(mixed, rate)
 
             extras: list[Path] = []
@@ -310,7 +310,7 @@ class RemixGenerator(Generator):
         ctx.report(0.45, "Writing the new backing", "backing")
         result = generator.generate(bed_request, child)
 
-        samples, bed_rate = _result_audio(result, generator, child, self)
+        samples, bed_rate = _result_audio(result, generator, child)
         samples = dsp.to_stereo(samples)
         if bed_rate != rate:
             samples = dsp.resample(samples, bed_rate, rate)
@@ -320,7 +320,7 @@ class RemixGenerator(Generator):
         lead = int(max(0.0, beat_offset) * rate)
         if lead:
             samples = np.concatenate(
-                [np.zeros((lead,) + samples.shape[1:], dtype=np.float32), samples]
+                [np.zeros((lead, *samples.shape[1:]), dtype=np.float32), samples]
             )
 
         repeats = max(1, int(np.ceil(frames / max(1, samples.shape[0]))))
@@ -344,7 +344,8 @@ class RemixGenerator(Generator):
             target_lufs=None, trim=False,
         )
         written: list[Path] = []
-        for name, layer in list(zip(kept_names, kept)) + [("new backing", bed)]:
+        parts = [*zip(kept_names, kept, strict=True), ("new backing", bed)]
+        for name, layer in parts:
             written.append(
                 export_audio(
                     AudioBuffer(dsp.to_stereo(layer), rate),
@@ -367,7 +368,7 @@ def _read(path: str) -> np.ndarray:
 
 
 def _result_audio(result: GenerationResult, generator: Generator,
-                  ctx: GeneratorContext, owner: Generator) -> tuple[np.ndarray, int]:
+                  ctx: GeneratorContext) -> tuple[np.ndarray, int]:
     """The backing as samples, rendering a symbolic backend's score if needed."""
     if result.audio is not None:
         return np.asarray(result.audio.samples, dtype=np.float32), result.audio.sample_rate

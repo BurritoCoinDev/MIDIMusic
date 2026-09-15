@@ -369,8 +369,9 @@ class TestOrchestralScore:
 
         _layers, full = build_sections(self._tracks(), tempo=120.0)
         # Woodwinds at the top of the page, strings at the bottom, as printed.
-        assert [t.name for t in full.tracks][0] == "Reeds"
-        assert [t.name for t in full.tracks][-1] == "Ensemble"
+        order = [t.name for t in full.tracks]
+        assert order[0] == "Reeds"
+        assert order[-1] == "Ensemble"
         assert full.note_count == 7
 
     def test_percussion_keeps_the_drum_channel(self):

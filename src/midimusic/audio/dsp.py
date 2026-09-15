@@ -269,7 +269,7 @@ def fit_length(x: np.ndarray, frames: int, sample_rate: int,
     x = np.asarray(x, dtype=np.float32)
     frames = max(0, int(frames))
     if frames == 0 or x.size == 0:
-        return np.zeros((frames,) + x.shape[1:], dtype=np.float32)
+        return np.zeros((frames, *x.shape[1:]), dtype=np.float32)
     if x.shape[0] >= frames:
         return x[:frames]
 
