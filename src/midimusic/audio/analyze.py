@@ -14,7 +14,13 @@ import numpy as np
 
 from ..theory.pitch import NOTE_NAMES
 
-__all__ = ["AudioAnalysis", "analyze_audio", "estimate_key", "estimate_tempo"]
+__all__ = [
+    "AudioAnalysis",
+    "analyze_audio",
+    "beat_phase",
+    "estimate_key",
+    "estimate_tempo",
+]
 
 # Krumhansl-Kessler key profiles: how strongly each pitch class is expected to
 # feature in a major or minor key. Correlating a piece's chroma against all 24
@@ -123,6 +129,48 @@ def estimate_tempo(samples: np.ndarray, rate: int,
     while bpm > 190:
         bpm /= 2
     return round(float(bpm), 1), round(confidence, 3)
+
+
+def beat_phase(samples: np.ndarray, rate: int, tempo: float) -> float:
+    """Seconds from the start of the recording to where its pulse falls.
+
+    Knowing the tempo is not enough to put a newly generated backing under an
+    existing performance: the generated part starts its first beat at time
+    zero, and the recording almost never does. This finds the offset that puts
+    the two in phase, which is the difference between a backing that sits with
+    the vocal and one that is permanently a fraction of a beat early.
+
+    The answer is always inside one beat, because any larger shift is the same
+    phase a beat later.
+    """
+    if tempo <= 0:
+        return 0.0
+    # A short window and a fine hop: resolution matters here and frequency
+    # detail does not, since what is being located is a change in broadband
+    # energy. The first minute and a half is plenty -- phase is a property of
+    # the performance, not of any one bar.
+    frame, hop = 512, 128
+    mono = _to_mono(samples)[: int(rate * 90)]
+    flux, fps = _onset_envelope(mono, rate, hop=hop, frame=frame)
+    period = 60.0 / tempo * fps
+    if flux.size < period * 2 or period < 2:
+        return 0.0
+
+    # Score every candidate phase by how much onset energy lands on the beat.
+    # The winner is the phase the music is actually played in.
+    steps = int(round(period))
+    best_offset, best_score = 0, -np.inf
+    for offset in range(steps):
+        positions = np.rint(np.arange(offset, flux.size - 1, period)).astype(np.int64)
+        score = float(flux[positions].sum() / max(1, positions.size))
+        if score > best_score:
+            best_score, best_offset = score, offset
+
+    # Spectral flux rises as soon as a transient enters the analysis window,
+    # which is before the transient itself, so the raw answer runs early by
+    # about half the window. Correct for it rather than shipping the bias.
+    seconds = best_offset / fps + (frame - hop) / (2.0 * rate)
+    return round(float(seconds % (60.0 / tempo)), 4)
 
 
 def _bass_chroma(mono: np.ndarray, rate: int) -> np.ndarray:

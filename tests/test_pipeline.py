@@ -418,6 +418,176 @@ class TestOrchestralScore:
         assert "transformers<5" in generator.required_packages()
 
 
+class TestFrozenBuild:
+    """What the packaged build has to be told, because imports cannot show it.
+
+    Every backend is resolved from a string in the registry, so a bundler that
+    follows imports finds none of them. The symptom is not a crash but a
+    backend that is quietly absent from the packaged app, which is exactly the
+    kind of thing a source checkout never reveals.
+    """
+
+    def test_the_module_list_covers_every_adapter(self):
+        from midimusic.core.registry import (
+            ADAPTERS,
+            IN_PROCESS_ADAPTERS,
+            adapter_modules,
+        )
+
+        listed = set(adapter_modules())
+        for target in list(ADAPTERS.values()) + list(IN_PROCESS_ADAPTERS.values()):
+            assert target.partition(":")[0] in listed, target
+
+    def test_every_listed_module_imports(self):
+        import importlib
+
+        from midimusic.core.registry import adapter_modules
+
+        for name in adapter_modules():
+            assert importlib.import_module(name) is not None
+
+    def test_no_backend_is_reachable_by_import_alone(self):
+        # If this ever fails it is good news, but until then the list above is
+        # the only thing keeping these modules in the bundle.
+        from midimusic.core.registry import adapter_modules
+
+        assert adapter_modules(), "the registry named no adapter modules"
+
+    def test_the_spec_asks_the_registry_rather_than_repeating_it(self):
+        spec = Path(__file__).resolve().parents[1] / "packaging" / "windows" / "midimusic.spec"
+        text = spec.read_text(encoding="utf-8")
+        assert "adapter_modules()" in text
+        # A second, hand-written copy of the list is what went stale before.
+        body = text.split("hiddenimports = [", 1)[1].split("]", 1)[0]
+        assert "midimusic." not in body, "the spec is hard-coding backend modules again"
+
+
+class TestRemix:
+    """Keeping one layer of a recording and generating the rest."""
+
+    @staticmethod
+    def _fake_separation(monkeypatch, rate=22050, seconds=6.0):
+        """Stand in for Demucs, so the mix path can be tested without it."""
+        import os
+        from types import SimpleNamespace
+
+        import numpy as np
+        import soundfile as sf
+
+        from midimusic.core import remix as remix_module
+
+        levels = {"vocals": 0.30, "drums": 0.25, "bass": 0.20, "other": 0.15}
+        calls: dict = {}
+
+        def fake_run_worker(payload, on_progress=None, should_cancel=None):
+            calls["payload"] = payload
+            folder = payload["output_dir"]
+            os.makedirs(folder, exist_ok=True)
+            t = np.arange(int(rate * seconds)) / rate
+            written = {}
+            for index, (name, gain) in enumerate(levels.items()):
+                wave = (np.sin(2 * np.pi * (110 * (index + 1)) * t) * gain).astype("float32")
+                path = os.path.join(folder, f"{name}.wav")
+                sf.write(path, np.stack([wave, wave], axis=1), rate, subtype="FLOAT")
+                written[name] = path
+            if on_progress:
+                on_progress(1.0, "Separating", "separate")
+            return SimpleNamespace(meta={"stems": written, "sample_rate": rate},
+                                   output_path=None)
+
+        monkeypatch.setattr(remix_module, "run_worker", fake_run_worker)
+        return calls, rate, seconds
+
+    def _request(self, source, out_dir, **extra):
+        base = {
+            "input_path": str(source), "output_dir": str(out_dir),
+            "separator": "demucs-htdemucs", "bed_model": "builtin-composer",
+            "keep_stems": ["vocals"], "save_stems": False, "max_seconds": 0.0,
+        }
+        base.update(extra)
+        return GenerationRequest(prompt="hard techno", model_id="stem-remix",
+                                 output_format=OutputFormat.FLAC,
+                                 duration_seconds=None, seed=4, extra=base)
+
+    def _source(self, tmp_path, rate=22050, seconds=6.0):
+        import numpy as np
+        import soundfile as sf
+
+        t = np.arange(int(rate * seconds)) / rate
+        wave = (np.sin(2 * np.pi * 220 * t) * 0.4).astype("float32")
+        path = tmp_path / "song.wav"
+        sf.write(str(path), np.stack([wave, wave], axis=1), rate)
+        return path
+
+    def test_it_keeps_one_layer_and_replaces_the_others(self, monkeypatch, tmp_path):
+        self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        source = self._source(tmp_path)
+        result = remix.generate(self._request(source, tmp_path), GeneratorContext())
+
+        assert result.meta["kept"] == ["vocals"]
+        assert result.meta["replaced"] == ["bass", "drums", "other"]
+        assert result.audio is not None
+        assert result.audio.duration_seconds == pytest.approx(6.0, abs=0.05)
+
+    def test_the_backing_is_written_at_the_recordings_own_tempo(self, monkeypatch, tmp_path):
+        self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        result = remix.generate(
+            self._request(self._source(tmp_path), tmp_path), GeneratorContext()
+        )
+        # The built-in composer writes to the tempo it is handed, so the mix
+        # can say the backing is locked to the recording rather than drifting.
+        assert result.meta["beat_locked"] is True
+        assert result.meta["tempo"] > 0
+
+    def test_keeping_everything_is_refused_with_a_reason(self, monkeypatch, tmp_path):
+        from midimusic.core.generator import BackendUnavailable
+
+        self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        request = self._request(self._source(tmp_path), tmp_path,
+                                keep_stems=["vocals", "drums", "bass", "other"])
+        with pytest.raises(BackendUnavailable, match="nothing to regenerate"):
+            remix.generate(request, GeneratorContext())
+
+    def test_the_parts_can_be_saved_alongside_the_mix(self, monkeypatch, tmp_path):
+        self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        result = remix.generate(
+            self._request(self._source(tmp_path), tmp_path, save_stems=True),
+            GeneratorContext(),
+        )
+        names = {p.stem for p in result.paths}
+        assert "vocals" in names and "new backing" in names
+
+    def test_the_kept_layer_is_still_audible_in_the_mix(self, monkeypatch, tmp_path):
+        import numpy as np
+
+        _calls, rate, _seconds = self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        result = remix.generate(
+            self._request(self._source(tmp_path), tmp_path), GeneratorContext()
+        )
+        # The kept stem is a 110 Hz tone. If the backing had swamped it, or the
+        # mix had simply dropped it, that bin would be gone.
+        mono = np.asarray(result.audio.samples).mean(axis=1)
+        spectrum = np.abs(np.fft.rfft(mono * np.hanning(mono.size)))
+        freqs = np.fft.rfftfreq(mono.size, 1.0 / rate)
+        band = spectrum[(freqs > 105) & (freqs < 115)].max()
+        assert band > spectrum.mean() * 20
+
+    def test_the_prompt_carries_the_tempo_and_key(self):
+        from midimusic.audio.analyze import AudioAnalysis
+        from midimusic.core.remix import condition_prompt
+
+        analysis = AudioAnalysis(tempo=128.0, key="A minor")
+        assert condition_prompt("edm", analysis) == "edm, 128 bpm, in A minor"
+        # Nothing measured, nothing added.
+        assert condition_prompt("edm", AudioAnalysis()) == "edm"
+        assert condition_prompt("", None) == "instrumental backing"
+
+
 class TestModelPackages:
     def test_torch_is_never_reinstalled_from_pypi(self):
         from midimusic.core.runtime import model_packages

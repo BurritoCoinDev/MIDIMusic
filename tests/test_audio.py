@@ -255,3 +255,142 @@ class TestAnalysis:
         unsure = AudioAnalysis(tempo=120, key="C major", key_confidence=0.1,
                                key_alternatives=[("C major", 1.0), ("A minor", 0.95)])
         assert "(or A minor)" in unsure.describe()
+
+
+class TestMixingHelpers:
+    """The pieces that put a generated backing under a kept performance."""
+
+    def _tone(self, seconds=2.0, rate=44100, freq=220.0, gain=0.5):
+        import numpy as np
+
+        t = np.arange(int(rate * seconds)) / rate
+        wave = (np.sin(2 * np.pi * freq * t) * gain).astype("float32")
+        return np.stack([wave, wave], axis=1)
+
+    def test_a_short_bed_is_repeated_to_cover_the_track(self):
+        from midimusic.audio import dsp
+
+        rate = 44100
+        short = self._tone(2.0, rate)
+        out = dsp.fit_length(short, rate * 7, rate, crossfade=0.25)
+        assert out.shape == (rate * 7, 2)
+
+    def test_a_long_bed_is_trimmed(self):
+        from midimusic.audio import dsp
+
+        rate = 44100
+        out = dsp.fit_length(self._tone(5.0, rate), rate * 2, rate)
+        assert out.shape[0] == rate * 2
+
+    def test_the_joins_are_crossfaded_rather_than_cut(self):
+        import numpy as np
+
+        from midimusic.audio import dsp
+
+        rate = 8000
+        # A tone that starts and ends at very different levels: a butt splice
+        # would leave a step at the join, which is what clicks.
+        ramp = np.linspace(0.0, 1.0, rate, dtype="float32")[:, None].repeat(2, axis=1)
+        joined = dsp.fit_length(ramp, rate * 2, rate, crossfade=0.2)
+        step = float(np.abs(np.diff(joined[:, 0])).max())
+        hard = float(np.abs(np.diff(np.concatenate([ramp, ramp])[:, 0])).max())
+        assert step < hard
+
+    def test_an_empty_bed_yields_silence_of_the_right_length(self):
+        import numpy as np
+
+        from midimusic.audio import dsp
+
+        out = dsp.fit_length(np.zeros((0, 2), dtype="float32"), 500, 44100)
+        assert out.shape == (500, 2) and not out.any()
+
+    def test_loudness_matching_brings_a_quiet_bed_up(self):
+        from midimusic.audio import dsp
+
+        rate = 44100
+        reference = self._tone(2.0, rate, gain=0.5)
+        quiet = self._tone(2.0, rate, gain=0.12)  # about 12 dB down
+        matched = dsp.match_loudness(quiet, reference, rate)
+        before = dsp.measure(quiet, rate)["rms_db"]
+        after = dsp.measure(matched, rate)["rms_db"]
+        target = dsp.measure(reference, rate)["rms_db"]
+        assert after > before
+        assert abs(after - target) < 1.5
+
+    def test_loudness_matching_will_not_shout(self):
+        import numpy as np
+
+        from midimusic.audio import dsp
+
+        rate = 44100
+        # Near silence against a loud reference would otherwise ask for an
+        # enormous gain and turn the noise floor into the mix.
+        silence = (np.random.default_rng(0).normal(0, 1e-7, (rate, 2))).astype("float32")
+        loud = self._tone(1.0, rate, gain=0.9)
+        matched = dsp.match_loudness(silence, loud, rate, max_gain_db=24.0)
+        assert float(np.abs(matched).max()) < 0.01
+
+    def test_mixing_holds_the_ceiling(self):
+        import numpy as np
+
+        from midimusic.audio import dsp
+
+        rate = 44100
+        layers = [self._tone(1.0, rate, freq=f, gain=0.6) for f in (110, 220, 330)]
+        mixed = dsp.mix(layers, ceiling_db=-1.0)
+        assert float(np.abs(mixed).max()) <= 10 ** (-1.0 / 20.0) + 1e-6
+
+    def test_mixing_pads_shorter_layers(self):
+        from midimusic.audio import dsp
+
+        rate = 8000
+        mixed = dsp.mix([self._tone(1.0, rate), self._tone(0.25, rate)])
+        assert mixed.shape[0] == rate
+
+
+class TestBeatPhase:
+    """Finding where a recording's pulse falls, not just how fast it is."""
+
+    def _clicks(self, rate, tempo, offset, seconds=12.0):
+        import numpy as np
+
+        n = int(rate * seconds)
+        x = np.zeros(n, dtype="float32")
+        period = 60.0 / tempo
+        k = 0
+        while True:
+            i = int((offset + k * period) * rate)
+            if i + 400 >= n:
+                break
+            x[i:i + 400] = np.sin(2 * np.pi * 900 * np.arange(400) / rate) * \
+                np.linspace(1, 0, 400)
+            k += 1
+        return x
+
+    def test_it_finds_the_offset_of_the_pulse(self):
+        from midimusic.audio.analyze import beat_phase
+
+        rate, tempo, offset = 22050, 120.0, 0.125
+        found = beat_phase(self._clicks(rate, tempo, offset), rate, tempo)
+        assert abs(found - offset) < 0.02
+
+    def test_the_answer_is_always_inside_one_beat(self):
+        from midimusic.audio.analyze import beat_phase
+
+        rate, tempo = 22050, 100.0
+        period = 60.0 / tempo
+        for offset in (0.0, 0.1, 0.3, 0.5):
+            found = beat_phase(self._clicks(rate, tempo, offset % period), rate, tempo)
+            assert 0.0 <= found < period
+
+    def test_it_declines_to_guess_without_a_tempo(self):
+        from midimusic.audio.analyze import beat_phase
+
+        assert beat_phase(self._clicks(22050, 120.0, 0.1), 22050, 0.0) == 0.0
+
+    def test_it_survives_a_clip_too_short_to_measure(self):
+        import numpy as np
+
+        from midimusic.audio.analyze import beat_phase
+
+        assert beat_phase(np.zeros(64, dtype="float32"), 22050, 120.0) == 0.0

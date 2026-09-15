@@ -17,6 +17,7 @@ from .widgets.deconstruct_panel import DeconstructPanel
 from .widgets.library_panel import LibraryPanel, reveal_in_explorer
 from .widgets.models_panel import ModelsPanel
 from .widgets.queue_panel import QueuePanel
+from .widgets.remix_panel import RemixPanel
 from .widgets.settings_panel import SettingsPanel
 
 __all__ = ["MainWindow"]
@@ -39,6 +40,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.compose = ComposePanel(service)
         self.deconstruct = DeconstructPanel(service)
+        self.remix = RemixPanel(service)
         self.queue = QueuePanel(service)
         self.library = LibraryPanel(service)
         self.models = ModelsPanel(service)
@@ -46,6 +48,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.tabs.addTab(self.compose, "Compose")
         self.tabs.addTab(self.deconstruct, "Deconstruct")
+        self.tabs.addTab(self.remix, "Remix")
         self.tabs.addTab(self.queue, "Queue")
         self.tabs.addTab(self.library, "Library")
         self.tabs.addTab(self.models, "Models")
@@ -54,9 +57,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.compose.submitted.connect(self._on_submitted)
         self.deconstruct.submitted.connect(self._on_submitted)
+        self.remix.submitted.connect(self._on_submitted)
         self.queue.job_finished.connect(self._on_job_finished)
         self.queue.show_output.connect(self._reveal_job_output)
         self.models.catalog_changed.connect(self.compose.refresh_models)
+        self.models.catalog_changed.connect(self.remix.refresh_models)
         self.settings_panel.settings_changed.connect(self._on_settings_changed)
 
         self._build_menu()

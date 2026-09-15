@@ -281,6 +281,41 @@
       "license_note": "Generator weights badge Apache-2.0, but the required DiffRhythm-vae is under the Stability Community License, and DiffRhythm-1_2 declares no licence at all. Treat the whole pipeline as non-Apache until upstream clarifies."
     },
     {
+      "id": "stem-remix",
+      "name": "Remix (keep a layer, replace the rest)",
+      "kind": "remix",
+      "adapter": "remix",
+      "license": "MIT",
+      "commercial_use": true,
+      "size_gb": 0.0,
+      "vram_gb": 4.0,
+      "devices": [
+        "cuda",
+        "rocm",
+        "cpu"
+      ],
+      "tier": 1,
+      "flagship": true,
+      "outputs": [
+        "flac",
+        "wav"
+      ],
+      "vocals": true,
+      "sample_rate": 44100,
+      "max_duration": 1800,
+      "extras": [
+        "demucs"
+      ],
+      "stems": [
+        "vocals",
+        "drums",
+        "bass",
+        "other"
+      ],
+      "description": "Separates a recording, keeps the layers you choose -- the real vocal, usually -- and writes a new backing for them from your description.",
+      "notes": "Uses whichever separator and backing generator you pick, so it needs what those need. The licence shown is this app's; the backing carries whatever licence its generator does."
+    },
+    {
       "id": "yourmt3-orchestral",
       "name": "Orchestral score (YourMT3+)",
       "kind": "transcriber",

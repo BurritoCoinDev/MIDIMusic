@@ -121,8 +121,13 @@ class ModelCard(QtWidgets.QFrame):
         self.support.setVisible(bool(missing and installable))
 
         if not entry.needs_download:
-            # Nothing to fetch or delete for a built-in backend, so offer neither.
-            self.status.setText("Built in. Always ready.")
+            # Nothing to fetch or delete for a backend with no weights, so
+            # offer neither -- but it can still be missing its libraries, and
+            # "always ready" would be untrue then.
+            self.status.setText(
+                f"No download needed. Needs: {', '.join(missing)}" if missing
+                else "Built in. Always ready."
+            )
             self.action.setVisible(False)
             self.remove.setVisible(False)
             self.progress.setVisible(False)

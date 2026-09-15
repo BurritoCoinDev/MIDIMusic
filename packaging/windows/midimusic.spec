@@ -54,13 +54,16 @@ binaries = collect_dynamic_libs("soundfile") + collect_dynamic_libs("sounddevice
 binaries += binaries_extra
 datas += collect_data_files("soundfile") + collect_data_files("tinysoundfont")
 
+# Generation backends are resolved by name at runtime, so nothing imports them
+# statically and the bundler cannot find them by following imports. Ask the
+# registry which modules those are rather than keeping a second list here: a
+# hand-maintained copy falls behind the moment a backend is added, and the
+# symptom in the packaged app is a backend that simply is not there.
+sys.path.insert(0, str(ROOT / "src"))
+from midimusic.core.registry import adapter_modules  # noqa: E402
+
 hiddenimports = [
-    "midimusic.generators.builtin",
-    "midimusic.generators.musicgen",
-    "midimusic.generators.ace_step",
-    "midimusic.generators.diffusers_audio",
-    "midimusic.generators.symbolic_hf",
-    "midimusic.generators.symbolic_onnx",
+    *adapter_modules(),
     "soundfile",
     "sounddevice",
     "tinysoundfont",

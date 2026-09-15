@@ -12,7 +12,13 @@ import logging
 from .catalog import Catalog, ModelEntry, load_catalog
 from .generator import Generator
 
-__all__ = ["ADAPTERS", "available_generators", "create_generator", "register_adapter"]
+__all__ = [
+    "ADAPTERS",
+    "adapter_modules",
+    "available_generators",
+    "create_generator",
+    "register_adapter",
+]
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +39,7 @@ ADAPTERS: dict[str, str] = {
     "onnx-midi": "midimusic.generators.symbolic_onnx:OnnxMidiGenerator",
     "demucs": "midimusic.core.deconstruct:DeconstructGenerator",
     "score": "midimusic.core.score:ScoreGenerator",
+    "remix": "midimusic.core.remix:RemixGenerator",
 }
 
 # The original in-process adapters, kept for development and for anyone who
@@ -48,6 +55,19 @@ def use_in_process_backends(enabled: bool = True) -> None:
     """Route audio backends through this process instead of a worker."""
     source = IN_PROCESS_ADAPTERS if enabled else dict.fromkeys(IN_PROCESS_ADAPTERS, "midimusic.generators.remote:RemoteAudioGenerator")
     ADAPTERS.update(source)
+
+
+def adapter_modules() -> tuple[str, ...]:
+    """Every module an adapter lives in, as an import path.
+
+    These are only ever imported by name, which means a static analyser -- a
+    bundler's, in particular -- cannot see them. A frozen build that does not
+    list them ships without the backends, and the failure looks like "no such
+    adapter" rather than a missing file, so the packaging spec asks for this
+    list rather than keeping a copy that quietly falls behind.
+    """
+    targets = list(ADAPTERS.values()) + list(IN_PROCESS_ADAPTERS.values())
+    return tuple(sorted({t.partition(":")[0] for t in targets}))
 
 
 def register_adapter(name: str, target: str) -> None:

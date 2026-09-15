@@ -29,6 +29,7 @@ So MIDIMusic runs both:
 | Audio *and* a rough score | Audio model → FLAC, then transcription → MIDI |
 | A song you already have, taken apart | Deconstruct → per-layer FLAC and MIDI |
 | An orchestral or film cue, taken apart | Deconstruct → per-section MIDI |
+| A song with its backing replaced | Remix → keep the vocal, write a new band |
 
 The transcription bridge (basic-pitch) is honest about what it is: good on
 sparse or solo material, rough on dense mixes. It is a starting point, not a
@@ -96,6 +97,41 @@ estimate of the score, not the score.
 
 Apache-2.0 weights, about 560 MB, and roughly twice real time on a CPU. It runs
 on the whole mix rather than on stems, so there is no separation step first.
+
+---
+
+## Remix: keep the performance, replace the band
+
+Separation can isolate a real vocal. A generator can write a new backing for
+it. Put those together and a film cue becomes a dance track with the original
+singer still on top of it.
+
+Drop in a song, tick the layers to keep — the vocal, usually, because it is the
+one layer a model cannot convincingly replace — and describe what should go
+underneath. Everything you did not keep is thrown away and written anew.
+
+Two things decide whether the result is usable, and the app handles both rather
+than hoping the model does:
+
+**Level.** The new backing is measured against the stems it replaced and
+brought to their loudness. Normalising to a fixed target cannot do this,
+because the right level is whatever the rest of *this* mix happens to be — get
+it wrong and the kept vocal is either buried or left naked.
+
+**Timing.** The recording's tempo *and its phase* are measured: knowing a song
+is 128 bpm is not enough, because a generated backing starts its first beat at
+time zero and a performance almost never does. The backing is delayed into
+phase before it is mixed.
+
+What the app cannot do is make a waveform model land on your downbeats. So the
+default backing generator is the **built-in composer**, which writes at exactly
+the tempo it is given and therefore stays with the vocal. Pick MusicGen or
+ACE-Step instead and you get their sound, but the panel says plainly that the
+backing will drift — and if the model's maximum length is shorter than your
+song, it says how many times the backing has to loop to cover it.
+
+Tick **save the parts** to get the kept layers and the new backing as separate
+files, so you can balance the mix yourself.
 
 ---
 
@@ -232,6 +268,9 @@ allows.
 **Deconstruct** — drop in a recording and take it apart, as audio stems or as
 an orchestral score. The length limit stops after the opening of a long cue,
 which matters on a CPU.
+
+**Remix** — keep some layers of a recording and describe a new backing for the
+rest.
 
 **Queue** — generation runs one job at a time in the background, with live
 progress and a cancel button. The window stays responsive.

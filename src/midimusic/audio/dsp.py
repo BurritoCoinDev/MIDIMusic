@@ -12,8 +12,11 @@ import numpy as np
 __all__ = [
     "apply_fades",
     "dither_to_int",
+    "fit_length",
     "loudness_normalize",
+    "match_loudness",
     "measure",
+    "mix",
     "peak_envelope",
     "peak_normalize",
     "resample",
@@ -252,3 +255,94 @@ def measure(x: np.ndarray, sample_rate: int) -> dict[str, float]:
     except Exception:
         stats["lufs"] = -np.inf
     return stats
+
+
+def fit_length(x: np.ndarray, frames: int, sample_rate: int,
+               crossfade: float = 1.0) -> np.ndarray:
+    """Trim or repeat ``x`` until it is exactly ``frames`` long.
+
+    Repeating is what makes a thirty-second generated bed usable under a
+    four-minute song. The joins are equal-power crossfades rather than butt
+    splices: a hard cut between two takes of the same material clicks, and the
+    click is more noticeable than the repetition.
+    """
+    x = np.asarray(x, dtype=np.float32)
+    frames = max(0, int(frames))
+    if frames == 0 or x.size == 0:
+        return np.zeros((frames,) + x.shape[1:], dtype=np.float32)
+    if x.shape[0] >= frames:
+        return x[:frames]
+
+    overlap = int(min(max(0.0, crossfade) * sample_rate, x.shape[0] // 4))
+    out = x.copy()
+    if overlap <= 0:
+        while out.shape[0] < frames:
+            out = np.concatenate([out, x], axis=0)
+        return out[:frames]
+
+    # Equal power, so the crossfade holds a steady level instead of dipping.
+    ramp = np.linspace(0.0, np.pi / 2, overlap, dtype=np.float32)
+    fade_out, fade_in = np.cos(ramp), np.sin(ramp)
+    if x.ndim == 2:
+        fade_out, fade_in = fade_out[:, None], fade_in[:, None]
+
+    while out.shape[0] < frames:
+        head = out[-overlap:] * fade_out + x[:overlap] * fade_in
+        out = np.concatenate([out[:-overlap], head, x[overlap:]], axis=0)
+    return out[:frames].astype(np.float32)
+
+
+def match_loudness(x: np.ndarray, reference: np.ndarray, sample_rate: int,
+                   max_gain_db: float = 24.0) -> np.ndarray:
+    """Scale ``x`` to sit at the same loudness as ``reference``.
+
+    Used when one layer of a mix is replaced: the new part has to arrive at the
+    level of the parts it stands in for, or whatever was kept -- a vocal, say --
+    is left either buried or naked. Absolute normalisation cannot do this,
+    because the target is whatever the rest of the mix happens to be.
+    """
+    x = np.asarray(x, dtype=np.float32)
+    if x.size == 0 or np.asarray(reference).size == 0:
+        return x
+
+    here = measure(x, sample_rate)
+    there = measure(np.asarray(reference, dtype=np.float32), sample_rate)
+    # LUFS where it is measurable, RMS where the material is too short or too
+    # quiet for a loudness meter to return anything finite.
+    if np.isfinite(here.get("lufs", -np.inf)) and np.isfinite(there.get("lufs", -np.inf)):
+        delta = there["lufs"] - here["lufs"]
+    elif np.isfinite(here["rms_db"]) and np.isfinite(there["rms_db"]):
+        delta = there["rms_db"] - here["rms_db"]
+    else:
+        return x
+
+    delta = float(np.clip(delta, -max_gain_db, max_gain_db))
+    return (x * (10.0 ** (delta / 20.0))).astype(np.float32)
+
+
+def mix(layers: list[np.ndarray], ceiling_db: float = -1.0) -> np.ndarray:
+    """Sum layers of equal shape, holding the result under a peak ceiling.
+
+    Gain riding rather than clipping: summing four stems routinely exceeds full
+    scale, and turning the sum down preserves the balance between the layers
+    where limiting each one would not.
+    """
+    usable = [np.asarray(layer, dtype=np.float32) for layer in layers if np.asarray(layer).size]
+    if not usable:
+        return np.zeros((0, 2), dtype=np.float32)
+    frames = max(layer.shape[0] for layer in usable)
+    channels = max(layer.shape[1] if layer.ndim == 2 else 1 for layer in usable)
+
+    total = np.zeros((frames, channels), dtype=np.float32)
+    for layer in usable:
+        if layer.ndim == 1:
+            layer = np.repeat(layer[:, None], channels, axis=1)
+        elif layer.shape[1] < channels:
+            layer = np.repeat(layer[:, :1], channels, axis=1)
+        total[: layer.shape[0]] += layer[:frames]
+
+    ceiling = 10.0 ** (ceiling_db / 20.0)
+    peak = float(np.abs(total).max())
+    if peak > ceiling:
+        total *= ceiling / peak
+    return total

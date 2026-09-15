@@ -29,7 +29,8 @@ class TestMainWindow:
     def test_every_tab_constructs(self, window):
         titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
         assert titles == [
-            "Compose", "Deconstruct", "Queue", "Library", "Models", "Settings",
+            "Compose", "Deconstruct", "Remix", "Queue", "Library", "Models",
+            "Settings",
         ]
 
     def test_switching_tabs_does_not_raise(self, window, qapp):
@@ -402,3 +403,69 @@ class TestDeconstructPanel:
         panel.transcribe.setChecked(False)
         qapp.processEvents()
         assert panel.vocal_note.isHidden()
+
+
+class TestRemixPanel:
+    def _song(self, tmp_path):
+        import numpy as np
+        import soundfile as sf
+
+        path = tmp_path / "cue.flac"
+        sf.write(str(path), np.zeros((44100 * 2, 2), dtype="float32"), 44100)
+        return path
+
+    def test_vocals_are_kept_by_default(self, window):
+        panel = window.remix
+        assert panel.keep_stems() == ["vocals"]
+        assert "bass" in panel.keep_note.text()
+
+    def test_remix_is_disabled_until_a_song_is_chosen(self, window):
+        assert not window.remix.go.isEnabled()
+
+    def test_it_builds_a_request_from_the_controls(self, window, qapp, tmp_path):
+        panel = window.remix
+        panel.set_source(str(self._song(tmp_path)))
+        panel.prompt.setPlainText("hard techno")
+        panel.save_stems.setChecked(True)
+        panel.limit.setValue(60)
+        qapp.processEvents()
+
+        assert panel.go.isEnabled()
+        request = panel.build_request()
+        assert request.prompt == "hard techno"
+        assert request.model_id == "stem-remix"
+        assert request.extra["keep_stems"] == ["vocals"]
+        assert request.extra["save_stems"] is True
+        assert request.extra["max_seconds"] == 60.0
+
+    def test_keeping_every_layer_blocks_the_button(self, window, qapp, tmp_path):
+        panel = window.remix
+        panel.set_source(str(self._song(tmp_path)))
+        for box in panel._keep_boxes.values():
+            box.setChecked(True)
+        qapp.processEvents()
+        assert not panel.go.isEnabled()
+        assert "nothing is left" in panel.keep_note.text().lower()
+
+    def test_it_says_whether_the_backing_will_stay_in_time(self, window, qapp):
+        panel = window.remix
+        panel.bed.setCurrentIndex(panel.bed.findData("builtin-composer"))
+        qapp.processEvents()
+        # The built-in composer is held to a tempo; a waveform model is not,
+        # and the panel has to be straight about which one is in use.
+        assert "stays under" in panel.bed_note.text()
+
+        index = panel.bed.findData("musicgen-small")
+        if index >= 0:
+            panel.bed.setCurrentIndex(index)
+            qapp.processEvents()
+            assert "drift" in panel.bed_note.text()
+
+    def test_changing_the_separator_rebuilds_the_layer_choices(self, window, qapp):
+        panel = window.remix
+        index = panel.separator.findData("demucs-6s")
+        assert index >= 0
+        panel.separator.setCurrentIndex(index)
+        qapp.processEvents()
+        assert "guitar" in panel._keep_boxes
+        assert "piano" in panel._keep_boxes
