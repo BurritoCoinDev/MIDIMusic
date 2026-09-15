@@ -57,6 +57,16 @@ of the application bundle.
 | Diffusers | Apache-2.0 |
 | basic-pitch | Apache-2.0 |
 | ONNX Runtime | MIT |
+| Demucs | MIT |
+| mt3-infer | MIT |
+
+### A note on mt3-infer
+
+`mt3-infer` is MIT, and it vendors several upstream transcription models under
+their own terms. MIDIMusic uses only its **YourMT3** path, which is vendored
+from the authors' Hugging Face Space under Apache-2.0. Its other vendored
+backend, MT3-PyTorch, carries no declared upstream licence, so this app does
+not offer it and never loads it.
 
 ## Model weights
 
@@ -71,6 +81,8 @@ begins.
 | Anticipatory Music Transformer | Apache-2.0 | Yes (trained on Lakh MIDI, CC-BY 4.0) |
 | MIDI Composer (skytnt) | Apache-2.0 | Yes |
 | MusicGen | **CC-BY-NC-4.0** | **No** — non-commercial only |
+| YourMT3+ (orchestral score) | Apache-2.0 | Yes |
+| Demucs `htdemucs` / `htdemucs_6s` | MIT | Yes |
 | Stable Audio Open | Stability Community Licence | Conditional, below a revenue threshold |
 | DiffRhythm | Mixed | Unclear — generators badge Apache-2.0, but the required VAE is under the Stability Community Licence and one release declares no licence at all |
 
