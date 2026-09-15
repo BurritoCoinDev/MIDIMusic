@@ -10,23 +10,37 @@ deliberate.
 ## The shape of it
 
 ```
-Compose panel ─┐
-               ├─► AppService ─► JobQueue (one worker thread)
-Settings ──────┘                     │
-                                     ├─► Generator (in-process)
-                                     │     └─ builtin composer, symbolic models
-                                     │
-                                     └─► RemoteAudioGenerator
-                                           └─ subprocess ─► worker/runner.py
-                                                              └─ torch, models
-                                     │
-                                     ▼
-                               result → files
-                          Song ─► MIDI          (mido)
-                          Song ─► FLAC          (SoundFont or numpy synth)
-                          Audio ─► FLAC         (libsndfile)
-                          Audio ─► MIDI         (basic-pitch)
+Compose ──────┐
+Deconstruct ──┤
+Remix ────────┼─► AppService ─► JobQueue (one worker thread)
+Settings ─────┘                     │
+                                    ├─► Generator (in-process)
+                                    │     └─ builtin composer, symbolic models
+                                    │
+                                    ├─► RemoteAudioGenerator
+                                    ├─► DeconstructGenerator   (separation)
+                                    ├─► ScoreGenerator         (transcription)
+                                    └─► RemixGenerator ─┐
+                                          │             │ calls another
+                                          │             └─ Generator for the
+                                          │                replacement backing
+                                          └─ subprocess ─► worker/runner.py
+                                                             └─ torch, models
+                                    │
+                                    ▼
+                              result → files
+                         Song ─► MIDI          (mido)
+                         Song ─► FLAC          (SoundFont or numpy synth)
+                         Audio ─► FLAC         (libsndfile)
+                         Audio ─► MIDI         (basic-pitch, or mt3-infer)
 ```
+
+Taking a recording apart and putting a new one together both arrive as
+`Generator` implementations, so they inherit the queue, the progress reporting
+and the cancellation without a second job system. `RemixGenerator` goes one
+step further and *composes*: it is a Generator that calls another Generator for
+the backing, which is why any model in the catalog that can produce audio can
+serve as one.
 
 `AppService` owns the queue and decides how a result becomes files. Format
 conversion lives there, not in the generators — which is why a MIDI-only model
@@ -65,6 +79,32 @@ because the correct torch build depends on the GPU. So:
 
 A native crash in a GPU stack therefore fails one job. Cancellation kills the
 process, which is the only reliable way to interrupt a native library.
+
+### Separation and transcription answer different questions
+
+Both take a recording apart, and which one is right depends entirely on the
+material. Demucs asks "which audio belongs to the singer" -- the right question
+for a band, and close to meaningless for an orchestra, where there is no drum
+kit, no bass guitar and no vocal, and every desk lands in the same stem.
+
+A multi-instrument transcriber asks "what was played, and by what kind of
+instrument", which is the question a score answers. So orchestral material
+takes the transcription path and comes back as notes grouped into sections,
+while a band takes the separation path and comes back as audio.
+
+Neither is a fallback for the other and the app does not guess between them:
+the model picker offers both kinds, and the panel changes to suit whichever is
+chosen, because the options that make sense for stems (audio format, per-stem
+transcription) are meaningless for a score.
+
+### Orchestral grouping is a musical judgement, kept in one place
+
+A transcriber returns a General MIDI program, which is a sound rather than a
+seat in an orchestra. Deciding that program 47 is percussion rather than a
+string -- General MIDI files timpani at the end of the strings block -- is a
+judgement, so it lives in `theory/orchestra.py` rather than being scattered
+through whichever backend happened to need it. The same table orders the full
+score the way a printed one is ordered.
 
 ### AMD gets real GPU acceleration on Windows
 
