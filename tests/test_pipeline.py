@@ -771,6 +771,40 @@ class TestRemix:
         assert not set(first.paths) & set(second.paths)
         assert all(p.exists() for p in first.paths + second.paths)
 
+    def test_cancelling_leaves_nothing_behind_in_the_output_folder(
+        self, monkeypatch, tmp_path
+    ):
+        from midimusic.core.generator import GenerationCancelled
+
+        self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+
+        # Cancel once a part has actually been written -- counting calls to
+        # the cancel hook would fire somewhere earlier and never reach this
+        # code at all. The parts go straight into the user's output directory,
+        # and a cancelled job never reaches the library, so anything left
+        # behind is an unreferenced file with no way to clear it from the app.
+        from midimusic.core import remix as remix_module
+
+        state = {"written": False}
+        real_export = remix_module.export_audio
+
+        def export_then_cancel(*args, **kwargs):
+            path = real_export(*args, **kwargs)
+            state["written"] = True
+            return path
+
+        monkeypatch.setattr(remix_module, "export_audio", export_then_cancel)
+        ctx = GeneratorContext(cancelled=lambda: state["written"])
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        request = self._request(self._source(tmp_path), out_dir, save_stems=True)
+        with pytest.raises(GenerationCancelled):
+            remix.generate(request, ctx)
+
+        leftovers = [p for p in out_dir.rglob("*") if p.is_file()]
+        assert leftovers == [], leftovers
+
     def test_the_prompt_carries_the_tempo_and_key(self):
         from midimusic.audio.analyze import AudioAnalysis
         from midimusic.core.remix import condition_prompt
