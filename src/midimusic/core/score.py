@@ -92,12 +92,11 @@ def _is_sung(label: str) -> bool:
 def _channel_for(index: int, is_drum: bool) -> int:
     """A MIDI channel for the ``index``-th *pitched* track.
 
-    Percussion has channel 10 to itself by definition, so it must not consume
-    one of the fifteen the pitched parts share -- and the caller must not count
-    it when numbering them, or an orchestra with sixteen layers puts two
-    sections on one channel while another sits empty. Two tracks sharing a
-    channel share its program, and overlapping notes between them are resolved
-    away on playback.
+    Percussion has channel 10 to itself by definition, so the caller numbers
+    the pitched tracks without it. That keeps the numbering independent of
+    where the drum track happens to sit among them, and uses the low channels
+    first. Fifteen is all there are once percussion has taken its own; beyond
+    that two parts must share a channel, and therefore a program.
     """
     if is_drum:
         return _DRUM_CHANNEL

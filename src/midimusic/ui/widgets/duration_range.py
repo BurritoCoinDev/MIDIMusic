@@ -47,6 +47,11 @@ class DurationRange(QtWidgets.QWidget):
 
         self.minimum.setValue(max(floor, min(ceiling, int(low))))
         self.maximum.setValue(max(self.minimum.value(), min(ceiling, int(high))))
+        # What the user asked for, as opposed to what the current backend
+        # permits. Kept separately so that picking a short-form model and then
+        # changing your mind gives the range back instead of leaving it
+        # collapsed to that model's maximum.
+        self._wanted = (self.minimum.value(), self.maximum.value())
         self.minimum.valueChanged.connect(self._on_minimum)
         self.maximum.valueChanged.connect(self._on_maximum)
 
@@ -59,6 +64,7 @@ class DurationRange(QtWidgets.QWidget):
             self.maximum.blockSignals(True)
             self.maximum.setValue(value)
             self.maximum.blockSignals(False)
+        self._wanted = self.values()
         self.changed.emit()
 
     def _on_maximum(self, value: int) -> None:
@@ -66,6 +72,7 @@ class DurationRange(QtWidgets.QWidget):
             self.minimum.blockSignals(True)
             self.minimum.setValue(value)
             self.minimum.blockSignals(False)
+        self._wanted = self.values()
         self.changed.emit()
 
     # -- values -------------------------------------------------------------
@@ -79,25 +86,53 @@ class DurationRange(QtWidgets.QWidget):
             box.blockSignals(True)
             box.setValue(int(value))
             box.blockSignals(False)
+        self._wanted = self.values()
         self.changed.emit()
 
     def set_ceiling(self, seconds: int) -> None:
-        """Cap both ends, for a backend that cannot go beyond some length."""
+        """Cap both ends, for a backend that cannot go beyond some length.
+
+        Qt clamps a spinbox's value silently when its maximum drops, and with
+        signals blocked nothing downstream hears about it -- so the hint under
+        the control went on describing a range the widget no longer held. The
+        clamp is applied deliberately here, against the range the user asked
+        for rather than against whatever the last backend left behind, and
+        anything that actually moved is announced.
+        """
         seconds = max(self._floor, int(seconds))
-        for box in (self.minimum, self.maximum):
+        before = self.values()
+        wanted = self._wanted
+        for box, value in ((self.minimum, wanted[0]), (self.maximum, wanted[1])):
             box.blockSignals(True)
             box.setMaximum(seconds)
+            box.setValue(min(int(value), seconds))
             box.blockSignals(False)
+        if self.values() != before:
+            self.changed.emit()
 
     def is_fixed(self) -> bool:
         low, high = self.values()
         return high - low < 1
 
+    def is_capped(self) -> bool:
+        """Whether a backend's ceiling is currently holding the range down."""
+        return self.values() != self._wanted
+
     def describe(self) -> str:
         low, high = self.values()
         if self.is_fixed():
-            return f"Every track {format_seconds(low)} long."
-        return (
-            f"Each track lands somewhere between {format_seconds(low)} and "
-            f"{format_seconds(high)}; variations are spread across the range."
-        )
+            text = f"Every track {format_seconds(low)} long."
+        else:
+            text = (
+                f"Each track lands somewhere between {format_seconds(low)} and "
+                f"{format_seconds(high)}; variations are spread across the range."
+            )
+        if self.is_capped():
+            # Say why, rather than letting the number quietly disagree with
+            # what was typed.
+            text += (
+                f" Capped at {format_seconds(high)} by this model; "
+                f"your {format_seconds(self._wanted[1])} comes back with a "
+                "model that can manage it."
+            )
+        return text

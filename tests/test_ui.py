@@ -92,6 +92,35 @@ class TestComposePanel:
         assert all(30 <= n <= 90 for n in lengths)
         assert len(set(lengths)) == 4
 
+    def test_a_short_model_caps_the_range_and_says_so(self, window, qapp):
+        panel = window.compose
+        panel.duration.set_values(120, 240)
+        qapp.processEvents()
+
+        heard: list = []
+        panel.duration.changed.connect(lambda: heard.append(panel.duration.values()))
+        panel.duration.set_ceiling(30)
+        qapp.processEvents()
+
+        # Qt clamps a spinbox silently when its maximum drops. If that never
+        # reaches the hint, the text under the control goes on describing a
+        # range the widget no longer holds and the user is not told why.
+        assert panel.duration.values() == (30, 30)
+        assert heard, "the clamp was never announced"
+        assert panel.duration.is_capped()
+        assert "capped" in panel.duration.describe().lower()
+
+    def test_the_range_comes_back_when_a_longer_model_is_chosen(self, window, qapp):
+        panel = window.compose
+        panel.duration.set_values(120, 240)
+        panel.duration.set_ceiling(30)
+        panel.duration.set_ceiling(900)
+        qapp.processEvents()
+        # Otherwise picking a short-form model once quietly shortens every
+        # track from then on.
+        assert panel.duration.values() == (120, 240)
+        assert not panel.duration.is_capped()
+
     def test_the_ends_of_the_range_cannot_cross(self, window):
         panel = window.compose
         panel.duration.set_values(60, 120)
@@ -237,18 +266,29 @@ class TestEntryPoint:
             capture_output=True, text=True, timeout=timeout, cwd=str(root), env=env,
         )
 
-    def test_the_selftest_notices_a_backend_missing_from_the_build(self, monkeypatch):
-        from midimusic import __main__ as entry
-
-        # The frozen build's real failure mode: the app starts perfectly and
-        # the backends are simply absent, because nothing imports them by name
-        # and the bundler therefore never saw them.
-        assert entry._missing_backends() == []
-        monkeypatch.setattr(
-            entry, "_backend_modules",
-            lambda: ("midimusic.core.registry", "midimusic.nonexistent_backend"),
+    def test_the_selftest_fails_when_a_backend_is_missing(self):
+        # Drive the real entry point, not just the helper it calls: testing
+        # _missing_backends() alone would stay green if the check were removed
+        # from _selftest, which is the whole gate. A subprocess because
+        # _selftest builds a QApplication and there is already one here.
+        code = (
+            "import midimusic.__main__ as entry\n"
+            "entry._backend_modules = lambda: "
+            "('midimusic.core.registry', 'midimusic.no_such_backend')\n"
+            "raise SystemExit(entry._selftest([]))\n"
         )
-        assert entry._missing_backends() == ["midimusic.nonexistent_backend"]
+        result = self._run(["-c", code])
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "missing" in (result.stdout + result.stderr).lower()
+
+    def test_the_selftest_passes_when_every_backend_is_there(self):
+        code = (
+            "import midimusic.__main__ as entry\n"
+            "assert entry._missing_backends() == [], entry._missing_backends()\n"
+            "raise SystemExit(entry._selftest([]))\n"
+        )
+        result = self._run(["-c", code])
+        assert result.returncode == 0, result.stdout + result.stderr
 
     def test_launcher_runs_as_a_bare_script(self):
         # This is precisely how PyInstaller invokes the frozen entry point.
@@ -473,6 +513,26 @@ class TestRemixPanel:
             panel.bed.setCurrentIndex(index)
             qapp.processEvents()
             assert "drift" in panel.bed_note.text()
+
+    def test_a_catalog_refresh_keeps_the_users_choices(self, window, qapp):
+        panel = window.remix
+        panel.separator.setCurrentIndex(panel.separator.findData("demucs-6s"))
+        qapp.processEvents()
+        panel._keep_boxes["vocals"].setChecked(True)
+        panel._keep_boxes["piano"].setChecked(True)
+        panel._keep_boxes["drums"].setChecked(False)
+        before = (panel.separator.currentData(), panel.bed.currentData(),
+                  sorted(panel.keep_stems()))
+
+        # Any download or library install finishing fires this while the user
+        # is on another tab. Silently resetting their setup is how someone
+        # remixes with a configuration they did not choose.
+        panel.refresh_models()
+        qapp.processEvents()
+
+        after = (panel.separator.currentData(), panel.bed.currentData(),
+                 sorted(panel.keep_stems()))
+        assert after == before
 
     def test_changing_the_separator_rebuilds_the_layer_choices(self, window, qapp):
         panel = window.remix

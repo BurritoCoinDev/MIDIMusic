@@ -244,6 +244,7 @@ def uv_pip_install(
     extra_index_url: str = "https://pypi.org/simple",
     on_line: Callable[[str], None] | None = None,
     timeout: float = 3600,
+    extra_args: list[str] | None = None,
 ) -> subprocess.Popen | None:
     """Start a package install into ``python`` using uv, streaming output.
 
@@ -253,7 +254,8 @@ def uv_pip_install(
     uv = find_uv()
     if uv is None:
         return None
-    cmd = [str(uv), "pip", "install", "--python", str(python), *packages]
+    cmd = [str(uv), "pip", "install", "--python", str(python),
+           *(extra_args or []), *packages]
     if index_url:
         cmd += ["--index-url", index_url]
         # Must be an *extra* index: a second --index-url would let the resolver

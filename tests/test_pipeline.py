@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -235,11 +236,19 @@ class TestService:
         assert len(set(lengths)) == 3
         _wait(jobs, limit=400)
         assert all(j.status is JobStatus.DONE for j in jobs)
-        # The music is as long as it was asked to be, not merely requested so.
-        for job in jobs:
-            assert job.result.song.duration_seconds == pytest.approx(
-                job.request.duration_seconds, rel=0.35
-            )
+
+        # A per-job tolerance wide enough to survive the composer's rounding to
+        # whole bars is also wide enough for a generator that ignores the
+        # request and always writes the same length. Check the relationship
+        # instead: the longest request must produce the longest music, and the
+        # spread must survive.
+        pairs = sorted((j.request.duration_seconds, j.result.song.duration_seconds)
+                       for j in jobs)
+        produced = [made for _asked, made in pairs]
+        assert produced == sorted(produced), pairs
+        asked_spread = pairs[-1][0] - pairs[0][0]
+        made_spread = produced[-1] - produced[0]
+        assert made_spread > asked_spread * 0.5, pairs
 
     def test_unknown_model_falls_back_rather_than_failing(self, service):
         jobs = service.submit(
@@ -260,14 +269,30 @@ class TestDurationRange:
         assert resolve_durations(GenerationRequest(duration_seconds=None), 2) == [None, None]
 
     def test_lengths_are_spread_across_the_range(self):
-        request = GenerationRequest(min_duration_seconds=60,
-                                    max_duration_seconds=180, seed=11)
-        lengths = resolve_durations(request, 4)
-        assert all(60 <= n <= 180 for n in lengths)
-        assert len(set(lengths)) == 4
-        # Spread, not clustered: four slices of a two-minute band cannot all
-        # land within a few seconds of each other.
-        assert max(lengths) - min(lengths) > 40
+        low, high, count = 60.0, 180.0, 4
+        request = GenerationRequest(min_duration_seconds=low,
+                                    max_duration_seconds=high, seed=11)
+        lengths = sorted(resolve_durations(request, count))
+        assert all(low <= n <= high for n in lengths)
+        assert len(set(lengths)) == count
+
+        # One per slice, which is the property independent draws do not have.
+        # "In range, distinct, and reasonably far apart" is satisfied by
+        # uniform sampling, so asserting that would not test this at all.
+        width = (high - low) / count
+        for i, value in enumerate(lengths):
+            assert low + i * width <= value <= low + (i + 1) * width, (i, value)
+
+    def test_the_spread_holds_for_every_count(self):
+        for count in (2, 3, 5, 8):
+            request = GenerationRequest(min_duration_seconds=30,
+                                        max_duration_seconds=210, seed=5)
+            lengths = sorted(resolve_durations(request, count))
+            width = 180.0 / count
+            gaps = [b - a for a, b in pairwise(lengths)]
+            assert gaps and min(gaps) > 0, count
+            for i, value in enumerate(lengths):
+                assert 30 + i * width <= value <= 30 + (i + 1) * width, (count, i)
 
     def test_the_same_seed_gives_the_same_lengths(self):
         request = GenerationRequest(min_duration_seconds=30,
@@ -403,6 +428,43 @@ class TestOrchestralScore:
         )
         assert layers == [] and full.tracks == []
 
+    def test_a_sung_line_is_filed_as_a_voice_not_a_woodwind(self):
+        from midimusic.core.score import build_sections
+
+        # A transcriber has no General MIDI program for a voice, so it
+        # substitutes one -- YourMT3 uses Alto Sax. Its own label still says
+        # what it heard, and that is the better evidence.
+        tracks = [
+            {"name": "Singing Voice", "program": 65, "is_drum": False,
+             "notes": [[67, 0.0, 1.0, 90]]},
+            {"name": "Reed", "program": 65, "is_drum": False,
+             "notes": [[72, 0.0, 0.5, 80]]},
+        ]
+        layers, _full = build_sections(tracks, tempo=120.0)
+        by_name = {layer.name: layer for layer in layers}
+        assert "Voice" in by_name, [layer.name for layer in layers]
+        assert by_name["Voice"].note_count == 1
+        # A genuine reed part with the same program must stay where it is.
+        assert "Woodwinds" in by_name and by_name["Woodwinds"].note_count == 1
+
+    def test_percussion_keeps_to_its_own_channel(self):
+        from midimusic.core.score import build_sections
+
+        # Fifteen pitched layers is the most MIDI has channels for once
+        # percussion has taken channel 10. Every one of them must get its own:
+        # two sharing a channel would share its program, and any same-pitch
+        # overlap between them is resolved away on playback.
+        tracks = [{"name": "Drums", "program": 0, "is_drum": True,
+                   "notes": [[36, 0.0, 0.1, 100]]}]
+        tracks += [{"name": f"Part {i}", "program": 40 + i, "is_drum": False,
+                    "notes": [[60, 0.0, 1.0, 90]]} for i in range(15)]
+        _layers, full = build_sections(tracks, tempo=120.0)
+        pitched = [t.channel for t in full.tracks if not t.is_drum]
+        drums = [t.channel for t in full.tracks if t.is_drum]
+        assert len(set(pitched)) == len(pitched) == 15, sorted(pitched)
+        assert 9 not in pitched
+        assert drums == [9]
+
     def test_the_catalog_entry_fetches_only_its_own_checkpoint(self):
         entry = load_catalog().get("yourmt3-orchestral")
         assert entry is not None
@@ -417,6 +479,48 @@ class TestOrchestralScore:
         # so the pin is part of what the model needs, not a nicety.
         generator = create_generator(load_catalog().get("yourmt3-orchestral"))
         assert "transformers<5" in generator.required_packages()
+
+
+class TestDownloadState:
+    """Whether a model is really on disk, as opposed to having been started."""
+
+    def _cache(self, tmp_path, entry, files):
+        root = tmp_path / "hub" / f"models--{entry.repo.replace('/', '--')}"
+        snapshot = root / "snapshots" / "abc123"
+        for name in files:
+            target = snapshot / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"x" * 16)
+        snapshot.mkdir(parents=True, exist_ok=True)
+        return tmp_path
+
+    def test_a_started_download_is_not_a_finished_one(self, tmp_path):
+        from midimusic.core.downloader import model_is_present
+
+        entry = load_catalog().get("yourmt3-orchestral")
+        # huggingface_hub creates the snapshot pointer before the transfer, so
+        # "a directory exists" reported a cancelled download as installed --
+        # and for an entry that names one checkpoint, the only file that
+        # matters was the one missing.
+        models_dir = self._cache(tmp_path, entry, [])
+        assert not model_is_present(entry, models_dir)
+
+    def test_the_named_checkpoint_is_what_counts(self, tmp_path):
+        from midimusic.core.downloader import model_is_present
+
+        entry = load_catalog().get("yourmt3-orchestral")
+        assert not model_is_present(entry, self._cache(tmp_path / "a", entry, ["README.md"]))
+        assert model_is_present(entry, self._cache(tmp_path / "b", entry, list(entry.files)))
+
+    def test_partial_blobs_do_not_count_as_size(self, tmp_path):
+        from midimusic.core.downloader import local_size
+
+        entry = load_catalog().get("demucs-htdemucs")
+        root = tmp_path / "hub" / f"models--{entry.repo.replace('/', '--')}" / "blobs"
+        root.mkdir(parents=True)
+        (root / "done").write_bytes(b"x" * 100)
+        (root / "half.incomplete").write_bytes(b"x" * 900)
+        assert local_size(entry, tmp_path) == 100
 
 
 class TestFrozenBuild:
@@ -448,11 +552,25 @@ class TestFrozenBuild:
             assert importlib.import_module(name) is not None
 
     def test_no_backend_is_reachable_by_import_alone(self):
-        # If this ever fails it is good news, but until then the list above is
-        # the only thing keeping these modules in the bundle.
-        from midimusic.core.registry import adapter_modules
+        # The premise of the whole arrangement: importing the registry does not
+        # import the backends, so a bundler following imports cannot find them.
+        # Asserting adapter_modules() is merely non-empty, as this once did,
+        # restates the two dicts in registry.py and cannot fail.
+        import subprocess
+        import sys
 
-        assert adapter_modules(), "the registry named no adapter modules"
+        code = (
+            "import sys\n"
+            "import midimusic.core.registry as r\n"
+            "print(','.join(m for m in r.adapter_modules() if m in sys.modules))\n"
+        )
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                              text=True, cwd=str(Path(__file__).resolve().parents[1]))
+        assert done.returncode == 0, done.stderr
+        assert done.stdout.strip() == "", (
+            "a backend is now reachable by import; if that is deliberate, this "
+            f"test should say so: {done.stdout.strip()}"
+        )
 
     def test_the_spec_asks_the_registry_rather_than_repeating_it(self):
         spec = Path(__file__).resolve().parents[1] / "packaging" / "windows" / "midimusic.spec"
@@ -532,15 +650,29 @@ class TestRemix:
         assert result.audio.duration_seconds == pytest.approx(6.0, abs=0.05)
 
     def test_the_backing_is_written_at_the_recordings_own_tempo(self, monkeypatch, tmp_path):
+        from midimusic.generators.builtin import BuiltinComposerGenerator
+
         self._fake_separation(monkeypatch)
+        seen: list = []
+        original = BuiltinComposerGenerator.generate
+
+        def spy(self, request, ctx):
+            seen.append(request)
+            return original(self, request, ctx)
+
+        monkeypatch.setattr(BuiltinComposerGenerator, "generate", spy)
+
         remix = create_generator(load_catalog().get("stem-remix"))
         result = remix.generate(
             self._request(self._source(tmp_path), tmp_path), GeneratorContext()
         )
-        # The built-in composer writes to the tempo it is handed, so the mix
-        # can say the backing is locked to the recording rather than drifting.
+        # The metadata alone proves nothing: beat_locked is derived from the
+        # backend's declared capability, so it stays True even if the measured
+        # tempo is never passed on. Check what the generator was actually told.
+        assert seen, "the backing generator was never called"
+        assert seen[0].tempo == pytest.approx(result.meta["tempo"])
+        assert seen[0].key == result.meta["key"]
         assert result.meta["beat_locked"] is True
-        assert result.meta["tempo"] > 0
 
     def test_keeping_everything_is_refused_with_a_reason(self, monkeypatch, tmp_path):
         from midimusic.core.generator import BackendUnavailable
@@ -562,21 +694,82 @@ class TestRemix:
         names = {p.stem for p in result.paths}
         assert "vocals" in names and "new backing" in names
 
-    def test_the_kept_layer_is_still_audible_in_the_mix(self, monkeypatch, tmp_path):
+    @staticmethod
+    def _band(samples, rate, low, high):
         import numpy as np
 
-        _calls, rate, _seconds = self._fake_separation(monkeypatch)
-        remix = create_generator(load_catalog().get("stem-remix"))
-        result = remix.generate(
-            self._request(self._source(tmp_path), tmp_path), GeneratorContext()
-        )
-        # The kept stem is a 110 Hz tone. If the backing had swamped it, or the
-        # mix had simply dropped it, that bin would be gone.
-        mono = np.asarray(result.audio.samples).mean(axis=1)
+        mono = np.asarray(samples).mean(axis=1)
         spectrum = np.abs(np.fft.rfft(mono * np.hanning(mono.size)))
         freqs = np.fft.rfftfreq(mono.size, 1.0 / rate)
-        band = spectrum[(freqs > 105) & (freqs < 115)].max()
-        assert band > spectrum.mean() * 20
+        return float(spectrum[(freqs > low) & (freqs < high)].max())
+
+    def test_the_kept_layer_is_still_audible_in_the_mix(self, monkeypatch, tmp_path):
+        _calls, rate, _seconds = self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        source = self._source(tmp_path)
+
+        with_vocal = remix.generate(self._request(source, tmp_path), GeneratorContext())
+        without = remix.generate(
+            self._request(source, tmp_path, keep_stems=[]), GeneratorContext()
+        )
+
+        # An absolute threshold cannot answer this: the generated backing has
+        # energy at 110 Hz too, and clears any fixed bar on its own. The
+        # question is whether keeping the stem put something there that is
+        # otherwise absent, so the same remix with nothing kept is the control.
+        kept = self._band(with_vocal.audio.samples, rate, 105, 115)
+        control = self._band(without.audio.samples, rate, 105, 115)
+        assert kept > control * 3, f"kept {kept:.1f} vs control {control:.1f}"
+
+    def test_dropping_every_layer_is_honoured_rather_than_defaulted(
+        self, monkeypatch, tmp_path
+    ):
+        self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        result = remix.generate(
+            self._request(self._source(tmp_path), tmp_path, keep_stems=[]),
+            GeneratorContext(),
+        )
+        # Clearing every box means "rewrite the whole thing", not "fall back to
+        # the default". Reporting kept=["vocals"] here would be the app telling
+        # the user they asked for something they did not.
+        assert result.meta["kept"] == []
+        assert set(result.meta["replaced"]) == {"vocals", "drums", "bass", "other"}
+
+    def test_the_saved_parts_add_up_to_the_delivered_mix(self, monkeypatch, tmp_path):
+        import numpy as np
+        import soundfile as sf
+
+        self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        result = remix.generate(
+            self._request(self._source(tmp_path), tmp_path, save_stems=True),
+            GeneratorContext(),
+        )
+        parts = [sf.read(str(p), always_2d=True)[0] for p in result.paths]
+        assert len(parts) == 2  # the kept vocal and the new backing
+        length = min(len(p) for p in parts)
+        total = sum(p[:length] for p in parts)
+        mix = np.asarray(result.audio.samples)[:length]
+        # Saving the parts is only useful if they recombine. Each one being
+        # rescaled on the way out -- which is what happens if export is left to
+        # normalise them -- would put this error near the signal level.
+        assert float(np.abs(total - mix).max()) < 1e-4
+
+    def test_a_second_remix_does_not_overwrite_the_first_parts(
+        self, monkeypatch, tmp_path
+    ):
+        self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        source = self._source(tmp_path)
+        first = remix.generate(
+            self._request(source, tmp_path, save_stems=True), GeneratorContext()
+        )
+        second = remix.generate(
+            self._request(source, tmp_path, save_stems=True), GeneratorContext()
+        )
+        assert not set(first.paths) & set(second.paths)
+        assert all(p.exists() for p in first.paths + second.paths)
 
     def test_the_prompt_carries_the_tempo_and_key(self):
         from midimusic.audio.analyze import AudioAnalysis
@@ -609,6 +802,31 @@ class TestModelPackages:
         from midimusic.core.runtime import model_packages
 
         assert model_packages(["torch", "transformers<5"]) == ("transformers<5",)
+
+    def test_the_torch_filter_understands_real_requirement_strings(self):
+        from midimusic.core.runtime import model_packages, requirement_name
+
+        # Splitting on "<", ">" and "=" alone let these through, and a
+        # specifier that reaches pip replaces the vendor GPU build.
+        for spec in ("torch~=2.9.0", "torch!=2.8.0", "Torch", "TORCH>=2",
+                     "torch[device-gfx1100]", "torch @ git+https://example/x",
+                     "torch >= 2.1"):
+            assert requirement_name(spec) == "torch", spec
+            assert model_packages([spec, "demucs"]) == ("demucs",), spec
+
+    def test_a_library_install_pins_the_compute_stack_it_finds(self, tmp_path):
+        import sys
+
+        from midimusic.core.runtime import installed_torch_pins
+
+        # Filtering torch out of the request is not enough on its own: a
+        # library can depend on torchvision, whose wheels pin an exact torch,
+        # so the GPU build gets replaced through a dependency the filter never
+        # sees. Pinning what is already installed turns that into an error.
+        pins = installed_torch_pins(Path(sys.executable))
+        assert all("==" in pin for pin in pins)
+        if pins:
+            assert any(pin.startswith("torch==") for pin in pins)
 
     def test_every_catalog_model_names_installable_libraries(self):
         from midimusic.core.runtime import model_packages

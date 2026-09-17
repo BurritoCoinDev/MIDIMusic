@@ -13,8 +13,10 @@ Windows gets real GPU acceleration -- no WSL, no DirectML, no ZLUDA.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 import sys
+import tempfile
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -26,6 +28,7 @@ __all__ = [
     "RuntimeOption",
     "install_packages",
     "install_runtime",
+    "installed_torch_pins",
     "options_for",
 ]
 
@@ -265,6 +268,21 @@ def install_runtime(
 _TORCH_PACKAGES = frozenset({"torch", "torchaudio", "torchvision"})
 
 
+# A requirement's name is everything before its extras, version or URL. Doing
+# this by splitting on "<", ">" and "=" missed "torch~=2.9" and "torch!=2.8",
+# which then sailed past the filter below and replaced the vendor build.
+_REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def requirement_name(spec: str) -> str:
+    """The canonical distribution name a requirement string refers to."""
+    head = str(spec).split(";")[0].split("@")[0].split("[")[0]
+    match = _REQUIREMENT_NAME.match(head)
+    if not match:
+        return ""
+    return match.group(1).lower().replace("_", "-").replace(".", "-")
+
+
 def model_packages(extras: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     """The packages a model needs that installing torch does not already give.
 
@@ -274,10 +292,36 @@ def model_packages(extras: tuple[str, ...] | list[str]) -> tuple[str, ...]:
     """
     out = []
     for package in extras or ():
-        name = str(package).split("[")[0].split("<")[0].split(">")[0].split("=")[0].strip()
-        if name and name not in _TORCH_PACKAGES:
+        if requirement_name(package) not in _TORCH_PACKAGES:
             out.append(str(package))
     return tuple(dict.fromkeys(out))
+
+
+def installed_torch_pins(python: Path) -> list[str]:
+    """Exact pins for the torch family already present in ``python``.
+
+    Filtering torch out of a model's own requirement list is not enough: a
+    library can depend on torchvision, whose wheels pin an exact torch, so the
+    vendor build gets replaced through a dependency the filter never sees.
+    Pinning what is installed turns that into a resolution error the user can
+    read instead of a GPU stack that silently stops working.
+    """
+    code = (
+        "import importlib.metadata as m\n"
+        "for p in ('torch', 'torchaudio', 'torchvision'):\n"
+        "    try:\n"
+        "        print(p + '==' + m.version(p))\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    try:
+        done = subprocess.run(
+            [str(python), "-c", code], capture_output=True, text=True, timeout=120,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return [line.strip() for line in done.stdout.splitlines() if "==" in line]
 
 
 def install_packages(
@@ -310,7 +354,23 @@ def install_packages(
 
             target = Path(python_executable) if python_executable else create_runtime(on_line=emit)
             emit(f"Using {target}")
-            handle._process = uv_pip_install(list(packages), target, on_line=emit)
+
+            extra_args: list[str] = []
+            pins = installed_torch_pins(target)
+            if pins:
+                # Hold the GPU build in place for the resolution. If something
+                # here insists on a different torch the install fails and says
+                # so, which is a far better outcome than a working AMD or
+                # NVIDIA stack being swapped for a generic one behind the
+                # user's back.
+                emit("Holding the installed compute libraries: " + ", ".join(pins))
+                constraints = Path(tempfile.mkdtemp(prefix="midimusic-pins-")) / "pins.txt"
+                constraints.write_text("\n".join(pins) + "\n", encoding="utf-8")
+                extra_args = ["--constraint", str(constraints)]
+
+            handle._process = uv_pip_install(
+                list(packages), target, on_line=emit, extra_args=extra_args
+            )
             if handle._process is None:
                 raise RuntimeError("The environment builder is unavailable.")
             for line in handle._process.stdout or []:
@@ -323,6 +383,15 @@ def install_packages(
                 handle.error = "Cancelled"
             elif handle.returncode != 0:
                 handle.error = f"Installation failed with code {handle.returncode}"
+            else:
+                # Re-probe here, on this thread. Doing it from the completion
+                # callback would run it on the UI thread, where spawning an
+                # interpreter that imports torch freezes the window for as
+                # long as that takes.
+                emit("Checking what the runtime has now")
+                from .worker_client import probe_runtime
+
+                probe_runtime(refresh=True)
         except Exception as exc:
             handle.error = f"{type(exc).__name__}: {exc}"
             log.exception("package install failed")

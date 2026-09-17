@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 import numpy as np
 import pytest
 import soundfile as sf
@@ -281,6 +283,65 @@ class TestMixingHelpers:
         rate = 44100
         out = dsp.fit_length(self._tone(5.0, rate), rate * 2, rate)
         assert out.shape[0] == rate * 2
+
+    def test_tiling_keeps_musical_time(self):
+        import numpy as np
+
+        from midimusic.audio import dsp
+
+        # A marker at a fixed offset inside the clip. Each repetition must land
+        # one clip length later; if the join eats its crossfade out of the
+        # timeline instead, the copies creep earlier and a looped backing walks
+        # off the beat it was aligned to.
+        rate = 1000
+        clip = np.zeros((2000, 1), dtype="float32")
+        clip[800:805, 0] = 1.0
+        out = dsp.fit_length(clip, 8000, rate)
+        hits = np.flatnonzero(out[:, 0] > 0.5)
+        starts = [int(p) for i, p in enumerate(hits) if i == 0 or p - hits[i - 1] > 5]
+        strides = [b - a for a, b in pairwise(starts)]
+        assert strides, "the clip was never repeated"
+        slip = 2000 - min(strides)
+        assert slip <= dsp.crossfade_frames(2000, rate) + 1, strides
+        assert slip / rate < 0.05, f"{slip / rate:.3f}s lost per join"
+
+    def test_the_reported_repeat_count_matches_the_tiling(self):
+        import numpy as np
+
+        from midimusic.audio import dsp
+
+        rate = 1000
+        clip = np.zeros((2000, 1), dtype="float32")
+        clip[800:805, 0] = 1.0
+        for target in (2000, 3000, 8000, 20000):
+            out = dsp.fit_length(clip, target, rate)
+            hits = np.flatnonzero(out[:, 0] > 0.5)
+            seen = len([p for i, p in enumerate(hits)
+                        if i == 0 or p - hits[i - 1] > 5])
+            # Counting copies as ceil(target / len) ignores what each join
+            # costs and under-reports, which is what the UI then tells the user.
+            assert dsp.tiles_needed(2000, target, rate) >= seen, target
+
+    def test_a_join_cannot_swell_past_the_material_it_splices(self):
+        import numpy as np
+
+        from midimusic.audio import dsp
+
+        # A clip whose head and tail are identical: the crossfade then adds a
+        # signal to itself, and an equal-power law sums two halves of 0.707 to
+        # 1.414 -- a 3 dB swell straight past full scale. Sustained material
+        # spliced into itself does exactly this whenever the phase lines up.
+        rate, n = 44100, 44100
+        overlap = dsp.crossfade_frames(n, rate)
+        clip = (np.random.default_rng(0).normal(0, 0.2, (n, 1))).astype("float32")
+        clip = np.clip(clip, -0.8, 0.8)
+        clip[:overlap] = 0.8
+        clip[-overlap:] = 0.8
+
+        out = dsp.fit_length(clip, n * 3, rate)
+        assert float(np.abs(out).max()) <= 0.8 + 1e-3, (
+            f"the join reached {float(np.abs(out).max()):.3f} from sources of 0.8"
+        )
 
     def test_the_joins_are_crossfaded_rather_than_cut(self):
         import numpy as np

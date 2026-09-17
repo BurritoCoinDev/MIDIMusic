@@ -59,7 +59,28 @@ def model_is_present(entry: ModelEntry, models_dir: Path) -> bool:
         return False
     # A partial download leaves the blobs directory without any snapshot.
     snapshots = directory / "snapshots"
-    return snapshots.exists() and any(snapshots.iterdir())
+    if not snapshots.exists():
+        return False
+    revisions = [d for d in snapshots.iterdir() if d.is_dir()]
+    if not revisions:
+        return False
+    if not entry.files:
+        # No named files, so any complete-looking snapshot will do. An
+        # in-flight transfer leaves only .incomplete blobs behind, which is
+        # not the same thing as having the model.
+        return any(
+            f.is_file() and not f.name.endswith(".incomplete")
+            for revision in revisions
+            for f in revision.rglob("*")
+        )
+    # The pointer directory exists from the moment a transfer starts, so for an
+    # entry that names its files the only honest question is whether those
+    # files are there. Otherwise a download cancelled after two seconds reports
+    # "Installed. Ready." and the model fails later, in the worker.
+    return any(
+        all((revision / name).exists() for name in entry.files)
+        for revision in revisions
+    )
 
 
 def local_size(entry: ModelEntry, models_dir: Path) -> int:
@@ -69,7 +90,10 @@ def local_size(entry: ModelEntry, models_dir: Path) -> int:
     total = 0
     for path in directory.rglob("*"):
         try:
-            if path.is_file() and not path.is_symlink():
+            # Skip part-transferred blobs: counting them makes a cancelled
+            # download look like progress the user still has.
+            if path.is_file() and not path.is_symlink() \
+                    and not path.name.endswith(".incomplete"):
                 total += path.stat().st_size
         except OSError:
             continue

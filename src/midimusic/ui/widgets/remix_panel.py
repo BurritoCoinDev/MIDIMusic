@@ -108,7 +108,7 @@ class RemixPanel(QtWidgets.QWidget):
         form.setSpacing(10)
 
         self.separator = QtWidgets.QComboBox()
-        self.separator.currentIndexChanged.connect(self._rebuild_keep_boxes)
+        self.separator.currentIndexChanged.connect(lambda _i: self._rebuild_keep_boxes())
         form.addRow("Separate with", self.separator)
 
         self.keep_row = QtWidgets.QWidget()
@@ -172,10 +172,20 @@ class RemixPanel(QtWidgets.QWidget):
     # -- state --------------------------------------------------------------
 
     def refresh_models(self) -> None:
+        # The catalog changes whenever anything finishes downloading, and this
+        # runs on every one of those. Put the user's choices back afterwards:
+        # silently resetting the separator, the backing model and the kept
+        # layers while they are on another tab is how someone ends up
+        # remixing something they did not ask for.
+        keeping = self.keep_stems() or None
+        chosen_separator = self.separator.currentData()
+        chosen_bed = self.bed.currentData()
+
         self.separator.blockSignals(True)
         self.separator.clear()
         for entry in self.service.catalog.by_kind("separator"):
             self.separator.addItem(entry.name, entry.id)
+        self._restore(self.separator, chosen_separator)
         self.separator.blockSignals(False)
 
         self.bed.blockSignals(True)
@@ -183,25 +193,36 @@ class RemixPanel(QtWidgets.QWidget):
         for entry in self.service.usable_models("flac"):
             if entry.kind in ("symbolic", "audio"):
                 self.bed.addItem(entry.name, entry.id)
-        index = self.bed.findData(DEFAULT_BED_MODEL)
-        if index >= 0:
-            self.bed.setCurrentIndex(index)
+        self._restore(self.bed, chosen_bed or DEFAULT_BED_MODEL)
         self.bed.blockSignals(False)
 
-        self._rebuild_keep_boxes()
+        self._rebuild_keep_boxes(keeping)
 
-    def _rebuild_keep_boxes(self) -> None:
+    @staticmethod
+    def _restore(combo: QtWidgets.QComboBox, value) -> None:
+        index = combo.findData(value) if value else -1
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def _rebuild_keep_boxes(self, keeping: list[str] | None = None) -> None:
         while self.keep_layout.count():
             item = self.keep_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                # Cut the connection now rather than trusting deleteLater: a
+                # box that is still wired up can be toggled between here and
+                # its deletion, and _update_state would then read a dict that
+                # no longer holds it.
+                widget.toggled.disconnect()
+                widget.setParent(None)
                 widget.deleteLater()
         self._keep_boxes = {}
 
         entry = self.current_separator()
-        for stem in (entry.stems if entry else DEFAULT_KEEP):
+        stems = entry.stems if entry else DEFAULT_KEEP
+        for stem in stems:
             box = QtWidgets.QCheckBox(stem)
-            box.setChecked(stem in DEFAULT_KEEP)
+            box.setChecked(stem in keeping if keeping is not None else stem in DEFAULT_KEEP)
             box.toggled.connect(self._update_state)
             self.keep_layout.addWidget(box)
             self._keep_boxes[stem] = box

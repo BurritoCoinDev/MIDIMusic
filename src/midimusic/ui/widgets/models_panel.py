@@ -23,7 +23,12 @@ class ModelCard(QtWidgets.QFrame):
         super().__init__(parent)
         self.entry = entry
         self.service = service
-        self._handle = None
+        # One handle per operation. Sharing one meant each button's
+        # "already running, so cancel" branch cancelled whatever the *other*
+        # button had started, did no work of its own, and said nothing.
+        self._download = None
+        self._support = None
+        self._packages: tuple[str, ...] = ()
         self.setProperty("role", "card")
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -117,8 +122,8 @@ class ModelCard(QtWidgets.QFrame):
         # Libraries are a separate question from weights: a model can be fully
         # downloaded and still unusable because its Python package is missing,
         # and telling someone that without offering the fix is no help.
-        installable = model_packages(entry.extras)
-        self.support.setVisible(bool(missing and installable))
+        self._packages = self._support_packages(missing)
+        self.support.setVisible(bool(self._packages))
 
         if not entry.needs_download:
             # Nothing to fetch or delete for a backend with no weights, so
@@ -148,9 +153,14 @@ class ModelCard(QtWidgets.QFrame):
         self.remove.setVisible(present)
 
     def _on_action(self) -> None:
-        if self._handle is not None and not self._handle.done:
-            self._handle.stop()
+        if self._download is not None and not self._download.done:
+            self._download.stop()
             self.action.setText("Cancelling")
+            return
+        if self._support is not None and not self._support.done:
+            QtWidgets.QMessageBox.information(
+                self, "Busy", "Wait for the library install to finish first."
+            )
             return
         if self.entry.gated and not self.service.settings.hf_token:
             QtWidgets.QMessageBox.information(
@@ -162,7 +172,7 @@ class ModelCard(QtWidgets.QFrame):
         self.progress.setVisible(True)
         self.progress.setValue(0)
         self.action.setText("Cancel")
-        self._handle = download_model(
+        self._download = download_model(
             self.entry,
             self.service.settings.resolved_models_dir(),
             token=self.service.settings.hf_token,
@@ -170,17 +180,37 @@ class ModelCard(QtWidgets.QFrame):
             on_finished=lambda h: self._bridge.finished.emit(h.error or ""),
         )
 
+    def _support_packages(self, missing: list[str]) -> tuple[str, ...]:
+        """What to install so this model stops reporting itself unusable.
+
+        The catalog's ``extras`` are not always the same names the generator
+        reports missing -- the ONNX model lists ``onnx`` and needs
+        ``onnxruntime`` -- so installing the extras alone can leave the card
+        saying exactly what it said before. Install both, minus anything that
+        is not a package and minus the torch family, which comes from the
+        vendor index.
+        """
+        if not missing:
+            return ()
+        wanted = [*self.entry.extras, *(m for m in missing if " " not in m)]
+        return model_packages(wanted)
+
     def _on_support(self) -> None:
-        packages = model_packages(self.entry.extras)
+        if self._support is not None and not self._support.done:
+            self._support.stop()
+            self.support.setText("Cancelling")
+            return
+        if self._download is not None and not self._download.done:
+            QtWidgets.QMessageBox.information(
+                self, "Busy", "Wait for the download to finish first."
+            )
+            return
+        packages = self._packages
         if not packages:
             return
-        if self._handle is not None and not self._handle.done:
-            self._handle.stop()
-            return
-        self.support.setText("Installing")
-        self.support.setEnabled(False)
+        self.support.setText("Cancel")
         self.status.setText("Installing " + ", ".join(packages))
-        self._handle = install_packages(
+        self._support = install_packages(
             packages,
             on_line=lambda line: self._bridge.progress.emit(-1.0, line),
             on_finished=lambda h: self._bridge.finished.emit(h.error or ""),
@@ -207,14 +237,12 @@ class ModelCard(QtWidgets.QFrame):
     @QtCore.Slot(str)
     def _on_finished(self, error: str) -> None:
         self.progress.setVisible(False)
-        self._handle = None
+        for name in ("_download", "_support"):
+            handle = getattr(self, name)
+            if handle is not None and handle.done:
+                setattr(self, name, None)
         self.support.setText("Install support")
         self.support.setEnabled(True)
-        # A fresh probe, or the card would go on reporting the packages the
-        # install just added as missing.
-        from ...core.worker_client import probe_runtime
-
-        probe_runtime(refresh=True)
         if error:
             self.status.setText(error)
             self.status.setProperty("role", "error")
