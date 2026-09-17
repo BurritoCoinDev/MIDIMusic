@@ -185,11 +185,17 @@ class DeconstructGenerator(Generator):
             options = ExportOptions(
                 sample_rate=int(request.extra.get("sample_rate", 44100)),
                 bit_depth=int(request.extra.get("bit_depth", 24)),
-                # Stems are components of a mix, not masters: normalising each
-                # one to a loudness target would destroy their relative levels
-                # and make them impossible to recombine.
+                # Stems are components of a mix, not masters: rescaling each
+                # one would destroy their relative levels and make them
+                # impossible to recombine. That means switching normalisation
+                # off outright -- leaving target_lufs as None only swaps the
+                # loudness target for peak normalisation, which rescales them
+                # just as thoroughly.
                 target_lufs=None,
+                normalize=False,
                 trim=False,
+                fade_in=0.0,
+                fade_out=0.0,
             )
 
             names = sorted(stem_files)

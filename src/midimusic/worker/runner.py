@@ -315,18 +315,24 @@ def _midi_to_tracks(midi) -> list[dict]:
     ticks = midi.ticks_per_beat or 480
     # One tempo for the whole file is all a transcriber emits; read it rather
     # than assuming, but do not try to follow a tempo map that is not there.
+    # The FIRST one is the file's tempo: a `break` out of the inner loop alone
+    # would keep scanning later tracks and leave the last one winning.
     tempo = 500000
     for track in midi.tracks:
-        for msg in track:
-            if msg.type == "set_tempo":
-                tempo = msg.tempo
-                break
+        found = next((m.tempo for m in track if m.type == "set_tempo"), None)
+        if found is not None:
+            tempo = found
+            break
 
     out = []
     for track in midi.tracks:
         program = 0
         is_drum = False
-        open_notes: dict[tuple[int, int], tuple[float, int]] = {}
+        # A list per (channel, pitch), not one slot: the same note can be
+        # struck again before the first is released -- a repeated note under a
+        # sustained one -- and a single slot would throw the earlier strike
+        # away and then hang its note-off on the later one.
+        open_notes: dict[tuple[int, int], list[tuple[float, int]]] = {}
         notes: list[list] = []
         elapsed = 0.0
         for msg in track:
@@ -336,19 +342,24 @@ def _midi_to_tracks(midi) -> list[dict]:
             elif msg.type == "note_on" and msg.velocity > 0:
                 channel = int(getattr(msg, "channel", 0))
                 is_drum = is_drum or channel == 9
-                open_notes[(channel, msg.note)] = (elapsed, int(msg.velocity))
+                open_notes.setdefault((channel, msg.note), []).append(
+                    (elapsed, int(msg.velocity))
+                )
             elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
                 channel = int(getattr(msg, "channel", 0))
-                started = open_notes.pop((channel, msg.note), None)
-                if started is not None:
-                    begin, velocity = started
+                pending = open_notes.get((channel, msg.note))
+                if pending:
+                    # First in, first out: a note-off ends the oldest strike
+                    # still sounding, which is how a MIDI device reads it.
+                    begin, velocity = pending.pop(0)
                     notes.append([int(msg.note), round(begin, 4),
                                   round(max(0.02, elapsed - begin), 4), velocity])
         # A window can end mid-note; give those a nominal length rather than
         # dropping them, or every sustained string line loses its last chord.
-        for (_channel, pitch), (begin, velocity) in open_notes.items():
-            notes.append([int(pitch), round(begin, 4),
-                          round(max(0.05, elapsed - begin), 4), velocity])
+        for (_channel, pitch), pending in open_notes.items():
+            for begin, velocity in pending:
+                notes.append([int(pitch), round(begin, 4),
+                              round(max(0.05, elapsed - begin), 4), velocity])
         if notes:
             out.append({"name": track.name or "", "program": program,
                         "is_drum": is_drum, "notes": sorted(notes, key=lambda n: n[1])})
@@ -361,7 +372,6 @@ def run_transcribe_score(req: dict) -> dict:
     Long recordings are processed in windows: a film cue can run for minutes,
     and a single pass would give no progress and an unbounded memory profile.
     """
-    import numpy as np
     import soundfile as sf
 
     device = _resolve_device(req.get("device", "auto"))
@@ -405,13 +415,20 @@ def run_transcribe_score(req: dict) -> dict:
 
     window = max(15.0, float(req.get("window_seconds", 45.0)))
     step = int(window * rate)
-    total = max(1, int(np.ceil(len(mono) / step)))
+    # Count only the windows that will actually be transcribed. A trailing
+    # scrap shorter than half a second is skipped below, so counting it would
+    # make the progress bar stop short of the end and overstate the work in
+    # the result.
+    floor = rate // 2
+    total = max(1, len(mono) // step + (1 if len(mono) % step >= floor else 0))
 
     merged: dict[tuple[str, int, bool], dict] = {}
+    run = 0
     for index in range(total):
         chunk = mono[index * step: (index + 1) * step]
-        if chunk.size < rate // 2:
+        if chunk.size < floor:
             break
+        run += 1
         progress(0.1 + 0.85 * (index / total),
                  f"Transcribing {index + 1} of {total}", "transcribe")
         offset = index * step / rate
@@ -431,7 +448,12 @@ def run_transcribe_score(req: dict) -> dict:
         "duration": round(len(mono) / rate, 3),
         "device": device,
         "checkpoint": checkpoint,
-        "windows": total,
+        "windows": run,
+        # Each window is transcribed on its own, so a note held across a
+        # boundary is cut there and struck again on the other side. Saying so
+        # lets the caller present the score as the estimate it is.
+        "window_seconds": round(window, 3),
+        "stitched": run > 1,
     }
 
 

@@ -59,6 +59,13 @@ class ExportOptions:
     bit_depth: int = 24          # 16 or 24 for FLAC/WAV
     target_lufs: float | None = -14.0
     peak_ceiling_db: float = -1.0
+    # A master gets its level set for it. A stem does not: it is one part of a
+    # mix, and its level relative to the others is the information. Setting
+    # this False writes the samples exactly as handed over -- no loudness
+    # target, and no peak normalisation either, which is the trap: leaving
+    # target_lufs as None does not mean "leave it alone", it means "use the
+    # peak instead", and that rescales every part independently.
+    normalize: bool = True
     fade_in: float = 0.005
     fade_out: float = 0.35
     trim: bool = True
@@ -90,7 +97,9 @@ def export_audio(
         x = dsp.resample(x, buffer.sample_rate, options.sample_rate)
 
     x = dsp.apply_fades(x, options.sample_rate, options.fade_in, options.fade_out)
-    if options.target_lufs is not None:
+    if not options.normalize:
+        pass
+    elif options.target_lufs is not None:
         x = dsp.loudness_normalize(
             x, options.sample_rate, options.target_lufs, options.peak_ceiling_db
         )

@@ -73,7 +73,32 @@ class ScoreResult:
         return out + [layer.path for layer in self.layers if layer.path]
 
 
+# A sung line has no General MIDI program, so a transcriber writing standard
+# MIDI has to substitute one -- YourMT3 files the lead under 65 (Alto Sax) and
+# a chorus under 53. Its own track label still says what it heard, so the label
+# is better evidence than the program number it was forced to pick.
+_SUNG_LABELS = ("singing", "vocal")
+
+# What a restored vocal line is written as, so it plays back as a voice rather
+# than as the effects patch that sits at program 100 in General MIDI.
+_VOICE_PROGRAM = 53  # Voice Oohs
+
+
+def _is_sung(label: str) -> bool:
+    lowered = (label or "").lower()
+    return any(word in lowered for word in _SUNG_LABELS)
+
+
 def _channel_for(index: int, is_drum: bool) -> int:
+    """A MIDI channel for the ``index``-th *pitched* track.
+
+    Percussion has channel 10 to itself by definition, so it must not consume
+    one of the fifteen the pitched parts share -- and the caller must not count
+    it when numbering them, or an orchestra with sixteen layers puts two
+    sections on one channel while another sits empty. Two tracks sharing a
+    channel share its program, and overlapping notes between them are resolved
+    away on playback.
+    """
     if is_drum:
         return _DRUM_CHANNEL
     channel = index % 15
@@ -91,19 +116,27 @@ def build_sections(tracks: list[dict], tempo: float = 120.0,
     grouped: dict[str, list[Track]] = {}
     ordered: list[Track] = []
 
-    for index, raw in enumerate(tracks):
+    pitched = 0
+    for raw in tracks:
         program = int(raw.get("program", 0))
         is_drum = bool(raw.get("is_drum"))
-        section = section_for(program, is_drum)
-        label = family_name(program, is_drum)
+        sung = not is_drum and _is_sung(str(raw.get("name") or ""))
+        if sung:
+            # Trust what the transcriber said it heard over the program it had
+            # to invent, or every vocal melody is filed as a woodwind.
+            program = _VOICE_PROGRAM
+        section = "Voice" if sung else section_for(program, is_drum)
+        label = "Voice" if sung else family_name(program, is_drum)
 
         track = Track(
             name=label,
             program=0 if is_drum else program,
-            channel=_channel_for(index, is_drum),
+            channel=_channel_for(pitched, is_drum),
             is_drum=is_drum,
             role=section.lower(),
         )
+        if not is_drum:
+            pitched += 1
         for pitch, start, duration, velocity in raw.get("notes", []):
             track.notes.append(
                 Note(
@@ -180,10 +213,11 @@ class ScoreGenerator(Generator):
             return ["compute runtime"]
         missing = [p for p in ("torch", "mt3_infer") if not info.get(p)]
         # The vendored transcriber reaches into transformers internals that 5.x
-        # removed, so a too-new transformers is as blocking as a missing one.
+        # removed, so a too-new transformers is as blocking as a missing one --
+        # and so is no transformers at all, which an empty version means.
         version = str(info.get("transformers_version") or "")
         major = version.split(".")[0]
-        if major.isdigit() and int(major) >= 5:
+        if not info.get("transformers") or not major.isdigit() or int(major) >= 5:
             missing.append("transformers<5")
         return [p.replace("_", "-") for p in missing]
 

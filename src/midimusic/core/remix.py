@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import tempfile
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -167,7 +168,11 @@ class RemixGenerator(Generator):
         if not source.exists():
             raise BackendUnavailable(f"No such audio file: {source}")
 
-        keep = tuple(request.extra.get("keep_stems") or DEFAULT_KEEP)
+        # `or DEFAULT_KEEP` would be wrong here: it cannot tell a missing key
+        # from a user who deliberately cleared every box, and clearing every
+        # box is the natural way to ask for the whole thing to be rewritten.
+        wanted = request.extra.get("keep_stems")
+        keep = tuple(DEFAULT_KEEP if wanted is None else wanted)
         separator_id = str(request.extra.get("separator") or "demucs-htdemucs")
         separator = load_catalog().get(separator_id)
         model = getattr(separator, "repo", "") or "htdemucs"
@@ -234,13 +239,16 @@ class RemixGenerator(Generator):
             bed = dsp.match_loudness(bed, reference, rate)
 
             layers = [dsp.to_stereo(layer)[:frames] for layer in kept]
-            mixed = dsp.mix([*layers, bed[:frames]])
+            mixed, gain = dsp.mix_layers([*layers, bed[:frames]])
             buffer = AudioBuffer(mixed, rate)
 
             extras: list[Path] = []
             if request.extra.get("save_stems"):
+                # The same gain the mix took to stay under the ceiling, so the
+                # saved parts still add up to the mix they came from.
                 extras = self._save_stems(
-                    request, source, kept_names, kept, bed, rate
+                    request, ctx, source, kept_names,
+                    [layer * gain for layer in layers], bed[:frames] * gain, rate,
                 )
 
         ctx.report(1.0, "Done", "remix")
@@ -315,46 +323,83 @@ class RemixGenerator(Generator):
         if bed_rate != rate:
             samples = dsp.resample(samples, bed_rate, rate)
 
-        # Delay the backing into phase with the recording before fitting, so
-        # the tiling below fills the tail rather than leaving silence there.
-        lead = int(max(0.0, beat_offset) * rate)
+        # Tile first, then place. Baking the lead-in into the clip before
+        # tiling would make the repeated unit `lead + length` long, so every
+        # repetition would start early by the lead and the backing would walk
+        # off the beat it was aligned to.
+        lead = min(int(max(0.0, beat_offset) * rate), max(0, frames - 1))
+        body = dsp.fit_length(samples, max(1, frames - lead), rate)
+        repeats = dsp.tiles_needed(samples.shape[0], max(1, frames - lead), rate)
         if lead:
-            samples = np.concatenate(
-                [np.zeros((lead, *samples.shape[1:]), dtype=np.float32), samples]
+            body = np.concatenate(
+                [np.zeros((lead, *body.shape[1:]), dtype=np.float32), body]
             )
+        fitted = body[:frames]
 
-        repeats = max(1, int(np.ceil(frames / max(1, samples.shape[0]))))
-        fitted = dsp.fit_length(samples, frames, rate, crossfade=1.0)
         # Only a backend that was given the tempo and writes to it stays with
-        # the kept layer; everything else drifts, and the caller should be told.
-        drifts = not (caps.honours_tempo and bool(analysis.tempo))
+        # the kept layer. Tiling loses a crossfade's worth of time at each
+        # join, so a looped backing does not stay locked either however good
+        # the backend is -- say so rather than reporting the backend's
+        # capability as though it were the outcome.
+        drifts = not (caps.honours_tempo and bool(analysis.tempo)) or repeats > 1
         return fitted, repeats, drifts
 
-    def _save_stems(self, request: GenerationRequest, source: Path,
-                    kept_names: list[str], kept: list[np.ndarray],
+    def _save_stems(self, request: GenerationRequest, ctx: GeneratorContext,
+                    source: Path, kept_names: list[str], kept: list[np.ndarray],
                     bed: np.ndarray, rate: int) -> list[Path]:
         """Write the parts as well as the mix, for anyone who wants to re-balance."""
         out_root = Path(str(request.extra.get("output_dir") or source.parent))
-        folder = out_root / safe_filename(f"{source.stem} remix parts", fallback="remix")
-        folder.mkdir(parents=True, exist_ok=True)
+        folder = _unique_folder(out_root, f"{source.stem} remix parts")
         options = ExportOptions(
             sample_rate=int(request.extra.get("sample_rate", rate)),
             bit_depth=int(request.extra.get("bit_depth", 24)),
-            # Parts of a mix, so their relative levels are the whole point.
-            target_lufs=None, trim=False,
+            # Parts of a mix: their levels relative to each other are the
+            # information, so nothing may rescale them, and a fade would move
+            # the ends. They have to sum back to the mix that was delivered.
+            target_lufs=None, normalize=False, trim=False,
+            fade_in=0.0, fade_out=0.0,
         )
         written: list[Path] = []
         parts = [*zip(kept_names, kept, strict=True), ("new backing", bed)]
-        for name, layer in parts:
-            written.append(
-                export_audio(
-                    AudioBuffer(dsp.to_stereo(layer), rate),
-                    folder / f"{safe_filename(name, fallback='layer')}.flac",
-                    OutputFormat.FLAC, options,
-                    TrackMetadata(title=f"{source.stem} - {name}", album=source.stem),
+        try:
+            for name, layer in parts:
+                ctx.check_cancelled()
+                written.append(
+                    export_audio(
+                        AudioBuffer(dsp.to_stereo(layer)[: bed.shape[0]], rate),
+                        folder / f"{safe_filename(name, fallback='layer')}.flac",
+                        OutputFormat.FLAC, options,
+                        TrackMetadata(title=f"{source.stem} - {name}", album=source.stem),
+                    )
                 )
-            )
+        except BaseException:
+            # These go straight into the user's output folder, and a cancelled
+            # job never reaches the library -- so anything already written
+            # would sit there unreferenced with no way to clear it from the
+            # app. Take it back out on the way past.
+            for path in written:
+                path.unlink(missing_ok=True)
+            with suppress(OSError):
+                folder.rmdir()
+            raise
         return written
+
+
+def _unique_folder(parent: Path, name: str) -> Path:
+    """A folder of this name that nothing else has written into.
+
+    Two remixes of the same song would otherwise share one parts folder: the
+    second would overwrite the first's files, and deleting either job from the
+    library with "delete files" would take the other's parts with it.
+    """
+    base = safe_filename(name, fallback="remix")
+    folder = parent / base
+    n = 2
+    while folder.exists():
+        folder = parent / f"{base} {n}"
+        n += 1
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
 
 
 def _verb(prompt: str) -> str:

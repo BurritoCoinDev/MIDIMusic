@@ -10,17 +10,21 @@ from __future__ import annotations
 import numpy as np
 
 __all__ = [
+    "DEFAULT_CROSSFADE",
     "apply_fades",
+    "crossfade_frames",
     "dither_to_int",
     "fit_length",
     "loudness_normalize",
     "match_loudness",
     "measure",
     "mix",
+    "mix_layers",
     "peak_envelope",
     "peak_normalize",
     "resample",
     "soft_clip",
+    "tiles_needed",
     "to_stereo",
     "trim_silence",
 ]
@@ -257,14 +261,54 @@ def measure(x: np.ndarray, sample_rate: int) -> dict[str, float]:
     return stats
 
 
+# How much of a clip a tiling join overlaps. Short on purpose: a crossfade
+# between a clip's tail and its own head has no material to borrow from, so
+# every join costs this much musical time. At 30 ms that is a third of a
+# hundredth of a bar and inaudible as drift; at a second -- which this used to
+# use -- it is a beat and a half, and a looped backing walks off the beat.
+DEFAULT_CROSSFADE = 0.03
+
+
+def crossfade_frames(source_frames: int, sample_rate: int,
+                     crossfade: float = DEFAULT_CROSSFADE) -> int:
+    """How many frames a tiling join will overlap, given the clip length."""
+    if source_frames <= 0 or sample_rate <= 0:
+        return 0
+    return int(max(0, min(max(0.0, crossfade) * sample_rate, source_frames // 4)))
+
+
+def tiles_needed(source_frames: int, frames: int, sample_rate: int,
+                 crossfade: float = DEFAULT_CROSSFADE) -> int:
+    """How many copies of a clip :func:`fit_length` would lay end to end.
+
+    Each join after the first advances the timeline by ``len - overlap``, not
+    ``len``, so counting copies as ``ceil(frames / len)`` reports fewer than
+    are really used. Callers that tell the user how often the material repeats
+    need the real number.
+    """
+    source_frames, frames = int(source_frames), int(frames)
+    if source_frames <= 0 or frames <= source_frames:
+        return 1
+    overlap = crossfade_frames(source_frames, sample_rate, crossfade)
+    stride = max(1, source_frames - overlap)
+    return 1 + int(np.ceil((frames - source_frames) / stride))
+
+
 def fit_length(x: np.ndarray, frames: int, sample_rate: int,
-               crossfade: float = 1.0) -> np.ndarray:
+               crossfade: float = DEFAULT_CROSSFADE) -> np.ndarray:
     """Trim or repeat ``x`` until it is exactly ``frames`` long.
 
     Repeating is what makes a thirty-second generated bed usable under a
-    four-minute song. The joins are equal-power crossfades rather than butt
-    splices: a hard cut between two takes of the same material clicks, and the
-    click is more noticeable than the repetition.
+    four-minute song. The joins are crossfaded rather than butt spliced: a hard
+    cut between two takes of the same material clicks, and the click is more
+    noticeable than the repetition.
+
+    The crossfade is deliberately short. A clip has no material beyond its own
+    end, so the only thing a join can fade into is the clip's head -- which
+    means every join consumes ``overlap`` frames of musical time. That is
+    unavoidable; keeping it to a few tens of milliseconds is what stops it
+    mattering. :func:`tiles_needed` reproduces the arithmetic for callers that
+    have to report how often the material repeats.
     """
     x = np.asarray(x, dtype=np.float32)
     frames = max(0, int(frames))
@@ -273,22 +317,33 @@ def fit_length(x: np.ndarray, frames: int, sample_rate: int,
     if x.shape[0] >= frames:
         return x[:frames]
 
-    overlap = int(min(max(0.0, crossfade) * sample_rate, x.shape[0] // 4))
+    overlap = crossfade_frames(x.shape[0], sample_rate, crossfade)
     out = x.copy()
     if overlap <= 0:
         while out.shape[0] < frames:
             out = np.concatenate([out, x], axis=0)
         return out[:frames]
 
-    # Equal power, so the crossfade holds a steady level instead of dipping.
+    # Equal power is right for a join between unrelated material, which is the
+    # usual case: a clip's tail and its head are different music. It is wrong
+    # when they happen to correlate -- a sustained tone splices into itself
+    # either in phase, swelling by up to 3 dB, or in antiphase, dropping out --
+    # so the blended block is held to the level of the louder of its two
+    # sources afterwards. That covers both directions without having to decide
+    # which case this is.
     ramp = np.linspace(0.0, np.pi / 2, overlap, dtype=np.float32)
     fade_out, fade_in = np.cos(ramp), np.sin(ramp)
     if x.ndim == 2:
         fade_out, fade_in = fade_out[:, None], fade_in[:, None]
 
     while out.shape[0] < frames:
-        head = out[-overlap:] * fade_out + x[:overlap] * fade_in
-        out = np.concatenate([out[:-overlap], head, x[overlap:]], axis=0)
+        tail, head = out[-overlap:], x[:overlap]
+        joined = tail * fade_out + head * fade_in
+        ceiling = max(float(np.abs(tail).max()), float(np.abs(head).max()))
+        peak = float(np.abs(joined).max())
+        if ceiling > 0 and peak > ceiling:
+            joined = joined * (ceiling / peak)
+        out = np.concatenate([out[:-overlap], joined, x[overlap:]], axis=0)
     return out[:frames].astype(np.float32)
 
 
@@ -321,28 +376,46 @@ def match_loudness(x: np.ndarray, reference: np.ndarray, sample_rate: int,
 
 
 def mix(layers: list[np.ndarray], ceiling_db: float = -1.0) -> np.ndarray:
-    """Sum layers of equal shape, holding the result under a peak ceiling.
+    """Sum layers, holding the result under a peak ceiling."""
+    return mix_layers(layers, ceiling_db)[0]
+
+
+def mix_layers(layers: list[np.ndarray],
+               ceiling_db: float = -1.0) -> tuple[np.ndarray, float]:
+    """Sum layers, and report the gain applied to hold the peak ceiling.
 
     Gain riding rather than clipping: summing four stems routinely exceeds full
     scale, and turning the sum down preserves the balance between the layers
     where limiting each one would not.
+
+    The gain comes back because a caller that also writes the layers out
+    separately has to apply the same number to them. Without it the parts are
+    louder than the mix they came from and no longer add up to it, which
+    defeats the point of saving them.
     """
     usable = [np.asarray(layer, dtype=np.float32) for layer in layers if np.asarray(layer).size]
     if not usable:
-        return np.zeros((0, 2), dtype=np.float32)
+        return np.zeros((0, 2), dtype=np.float32), 1.0
     frames = max(layer.shape[0] for layer in usable)
     channels = max(layer.shape[1] if layer.ndim == 2 else 1 for layer in usable)
 
     total = np.zeros((frames, channels), dtype=np.float32)
     for layer in usable:
         if layer.ndim == 1:
+            # One channel means the same signal everywhere, so spreading it is
+            # right. Anything wider is real, distinct content: place it in the
+            # channels it belongs to and leave the rest alone rather than
+            # copying channel one over the others and losing the difference.
             layer = np.repeat(layer[:, None], channels, axis=1)
-        elif layer.shape[1] < channels:
-            layer = np.repeat(layer[:, :1], channels, axis=1)
-        total[: layer.shape[0]] += layer[:frames]
+        elif layer.shape[1] == 1:
+            layer = np.repeat(layer, channels, axis=1)
+        clipped = layer[:frames]
+        total[: clipped.shape[0], : clipped.shape[1]] += clipped
 
     ceiling = 10.0 ** (ceiling_db / 20.0)
     peak = float(np.abs(total).max())
+    gain = 1.0
     if peak > ceiling:
-        total *= ceiling / peak
-    return total
+        gain = ceiling / peak
+        total *= gain
+    return total, gain
