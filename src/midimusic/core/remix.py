@@ -34,6 +34,7 @@ import soundfile as sf
 from ..audio import dsp
 from ..audio.analyze import AudioAnalysis, analyze_audio, beat_phase
 from ..audio.export import ExportOptions, TrackMetadata, export_audio, safe_filename
+from ..audio.timestretch import MAX_STRETCH, MIN_STRETCH, time_stretch
 from .catalog import load_catalog
 from .deconstruct import _trim_source
 from .generator import (
@@ -70,23 +71,49 @@ class RemixPlan:
     bed_model: str = ""
     drifts: bool = False
     beat_offset: float = 0.0
+    source_tempo: float = 0.0
+    tempo: float = 0.0
+    stretch: float = 1.0
+    silent_kept: list[str] = field(default_factory=list)
 
 
-def condition_prompt(prompt: str, analysis: AudioAnalysis | None) -> str:
-    """Add the recording's own tempo and key to a prompt.
+def condition_prompt(prompt: str, analysis: AudioAnalysis | None,
+                     tempo: float = 0.0) -> str:
+    """Add the tempo and key the backing must be written at to a prompt.
 
     Text is the only handle a waveform model offers on either, so a prompt that
-    does not mention them is asking the model to guess.
+    does not mention them is asking the model to guess. ``tempo`` overrides the
+    recording's own, for a remix that is moving it.
     """
     prompt = (prompt or "").strip() or "instrumental backing"
-    if analysis is None:
+    if analysis is None and not tempo:
         return prompt
     bits = []
-    if analysis.tempo:
-        bits.append(f"{analysis.tempo:.0f} bpm")
-    if analysis.key:
+    beats = tempo or (analysis.tempo if analysis else 0.0)
+    if beats:
+        bits.append(f"{beats:.0f} bpm")
+    if analysis is not None and analysis.key:
         bits.append(f"in {analysis.key}")
     return f"{prompt}, {', '.join(bits)}" if bits else prompt
+
+
+def _target_tempo(wanted, source_tempo: float) -> float:
+    """The tempo a remix should actually run at, or 0 to leave it alone.
+
+    A phase vocoder holds up over a moderate change and falls apart past one,
+    so an impossible ask is met with the closest tempo that still sounds like
+    the same performance rather than with mush -- and the result records both
+    numbers so the difference is visible.
+    """
+    try:
+        target = float(wanted or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if target <= 0 or source_tempo <= 0 or abs(target - source_tempo) < 0.5:
+        return 0.0
+    lowest = source_tempo / MAX_STRETCH
+    highest = source_tempo / MIN_STRETCH
+    return round(float(min(max(target, lowest), highest)), 2)
 
 
 class RemixGenerator(Generator):
@@ -222,14 +249,37 @@ class RemixGenerator(Generator):
             plan = RemixPlan(
                 kept=kept_names, replaced=replaced_names, analysis=analysis,
                 bed_model=getattr(bed_entry, "id", ""),
+                source_tempo=analysis.tempo, tempo=analysis.tempo,
             )
+            # A kept layer that turned out to be silence is worth saying out
+            # loud: an instrumental still produces a vocals stem, and keeping
+            # it looks like keeping something.
+            plan.silent_kept = [
+                name for name, layer in zip(kept_names, kept, strict=True)
+                if float(np.abs(layer).max() if layer.size else 0.0) < 1e-3
+            ]
+
             # Where the recording's pulse actually falls. A generated backing
             # starts its first beat at zero and a performance almost never
             # does, so without this the two are permanently out of phase.
             plan.beat_offset = beat_phase(mix_samples, int(mix_rate), analysis.tempo)
 
+            target = _target_tempo(request.extra.get("target_tempo"), analysis.tempo)
+            if target:
+                ctx.report(0.42, f"Re-timing to {target:.0f} bpm", "stretch")
+                plan.stretch = analysis.tempo / target
+                plan.tempo = target
+                # Everything kept has to move with the new tempo. Resampling
+                # would do it by playing faster, which raises the pitch and
+                # puts the kept layer in a different key from the backing --
+                # so the length changes and the frequencies do not.
+                kept = [time_stretch(layer, plan.stretch) for layer in kept]
+                frames = max((layer.shape[0] for layer in kept), default=frames)
+                plan.beat_offset *= plan.stretch
+
             bed, plan.repeats, plan.drifts = self._make_bed(
-                request, ctx, bed_generator, analysis, frames, rate, plan.beat_offset
+                request, ctx, bed_generator, analysis, frames, rate,
+                plan.beat_offset, plan.tempo,
             )
 
             ctx.check_cancelled()
@@ -266,7 +316,10 @@ class RemixGenerator(Generator):
                 "bed_repeats": plan.repeats,
                 "beat_locked": not plan.drifts,
                 "beat_offset": plan.beat_offset,
-                "tempo": analysis.tempo,
+                "tempo": plan.tempo,
+                "source_tempo": plan.source_tempo,
+                "time_stretched": plan.stretch != 1.0,
+                "silent_kept": plan.silent_kept,
                 "key": analysis.key,
                 "analysis": analysis.describe(),
             },
@@ -276,7 +329,8 @@ class RemixGenerator(Generator):
 
     def _make_bed(self, request: GenerationRequest, ctx: GeneratorContext,
                   generator: Generator, analysis: AudioAnalysis, frames: int,
-                  rate: int, beat_offset: float = 0.0) -> tuple[np.ndarray, int, bool]:
+                  rate: int, beat_offset: float = 0.0,
+                  tempo: float = 0.0) -> tuple[np.ndarray, int, bool]:
         """Generate the replacement backing and fit it to the kept material."""
         caps = generator.capabilities()
         wanted = frames / max(1, rate) + max(0.0, beat_offset)
@@ -296,11 +350,15 @@ class RemixGenerator(Generator):
         bed_request.variations = 1
         bed_request.instrumental = True
         bed_request.lyrics = ""
-        bed_request.prompt = condition_prompt(request.prompt, analysis)
+        # The backing is written at the tempo the finished remix runs at,
+        # which is the target when one was asked for and the recording's own
+        # otherwise.
+        wanted = float(tempo or analysis.tempo or 0.0)
+        bed_request.prompt = condition_prompt(request.prompt, analysis, wanted)
         # Explicit fields beat the prompt in every backend that reads them, so
         # a backend that can be held to the tempo and key is held to them.
-        if analysis.tempo:
-            bed_request.tempo = float(analysis.tempo)
+        if wanted:
+            bed_request.tempo = wanted
         if analysis.key:
             bed_request.key = analysis.key
         bed_request.extra = {
@@ -341,7 +399,7 @@ class RemixGenerator(Generator):
         # join, so a looped backing does not stay locked either however good
         # the backend is -- say so rather than reporting the backend's
         # capability as though it were the outcome.
-        drifts = not (caps.honours_tempo and bool(analysis.tempo)) or repeats > 1
+        drifts = not (caps.honours_tempo and bool(tempo or analysis.tempo)) or repeats > 1
         return fitted, repeats, drifts
 
     def _save_stems(self, request: GenerationRequest, ctx: GeneratorContext,

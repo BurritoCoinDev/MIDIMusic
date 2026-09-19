@@ -514,6 +514,26 @@ class TestRemixPanel:
             qapp.processEvents()
             assert "drift" in panel.bed_note.text()
 
+    def test_a_target_tempo_reaches_the_request(self, window, qapp, tmp_path):
+        panel = window.remix
+        panel.set_source(str(self._song(tmp_path)))
+        qapp.processEvents()
+        assert panel.build_request().extra["target_tempo"] == 0.0
+
+        panel.tempo.setValue(128)
+        qapp.processEvents()
+        assert panel.build_request().extra["target_tempo"] == 128.0
+        # Setting a tempo re-times the kept layers, which is a bigger thing to
+        # do than picking a number, so the panel has to say so.
+        assert "128" in panel.tempo_note.text()
+        assert "pitch" in panel.tempo_note.text()
+
+    def test_leaving_the_tempo_alone_is_the_default(self, window):
+        panel = window.remix
+        assert panel.tempo.value() == 0
+        assert "Keep the original" in panel.tempo.specialValueText()
+        assert "whatever tempo the recording" in panel.tempo_note.text()
+
     def test_a_catalog_refresh_keeps_the_users_choices(self, window, qapp):
         panel = window.remix
         panel.separator.setCurrentIndex(panel.separator.findData("demucs-6s"))

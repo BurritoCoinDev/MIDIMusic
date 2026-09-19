@@ -455,3 +455,104 @@ class TestBeatPhase:
         from midimusic.audio.analyze import beat_phase
 
         assert beat_phase(np.zeros(64, dtype="float32"), 22050, 120.0) == 0.0
+
+
+class TestTimeStretch:
+    """Moving a recording to a different tempo without moving its pitch."""
+
+    def _tone(self, seconds=2.0, rate=22050, freq=440.0):
+        t = np.arange(int(rate * seconds)) / rate
+        wave = np.sin(2 * np.pi * freq * t) * (0.5 + 0.5 * np.sin(2 * np.pi * 2 * t))
+        return wave.astype("float32"), rate
+
+    @staticmethod
+    def _peak_hz(x, rate):
+        mono = x.mean(axis=1) if x.ndim == 2 else x
+        spectrum = np.abs(np.fft.rfft(mono * np.hanning(mono.size)))
+        return float(np.fft.rfftfreq(mono.size, 1.0 / rate)[int(np.argmax(spectrum))])
+
+    def test_the_length_changes_and_the_pitch_does_not(self):
+        from midimusic.audio.timestretch import time_stretch
+
+        tone, rate = self._tone()
+        for factor in (0.6, 0.75, 1.25, 1.8):
+            out = time_stretch(tone, factor)
+            assert len(out) == int(round(len(tone) * factor)), factor
+            # Playing it faster would do the length but raise the pitch with
+            # it, which puts a kept layer in a different key from the backing
+            # written to go under it.
+            assert self._peak_hz(out, rate) == pytest.approx(440.0, abs=2.0), factor
+
+    def test_it_holds_its_level(self):
+        from midimusic.audio.timestretch import time_stretch
+
+        tone, _rate = self._tone()
+        source = float(np.sqrt((tone ** 2).mean()))
+        for factor in (0.75, 1.25, 1.5):
+            out = time_stretch(tone, factor)
+            got = float(np.sqrt((out ** 2).mean()))
+            # Advancing each bin's phase independently leaves consecutive
+            # output frames disagreeing, and the overlap-add then loses
+            # several dB. Anything worse than half a dB means the phase
+            # locking has stopped working.
+            assert abs(20 * np.log10(got / source)) < 0.5, (factor, got, source)
+
+    def test_a_chord_survives_intact(self):
+        from midimusic.audio.timestretch import time_stretch
+
+        rate = 22050
+        t = np.arange(rate * 2) / rate
+        chord = sum(np.sin(2 * np.pi * f * t) for f in (220.0, 277.18, 329.63))
+        chord = (chord / 3).astype("float32")
+        out = time_stretch(chord, 0.75)
+        spectrum = np.abs(np.fft.rfft(out * np.hanning(out.size)))
+        freqs = np.fft.rfftfreq(out.size, 1.0 / rate)
+        for wanted in (220.0, 277.18, 329.63):
+            near = spectrum[(freqs > wanted - 3) & (freqs < wanted + 3)]
+            assert near.size and near.max() > spectrum.mean() * 20, wanted
+
+    def test_stereo_keeps_both_channels(self):
+        from midimusic.audio.timestretch import time_stretch
+
+        rate = 22050
+        t = np.arange(rate * 2) / rate
+        left = np.sin(2 * np.pi * 300 * t) * 0.5
+        right = np.sin(2 * np.pi * 500 * t) * 0.5
+        stereo = np.stack([left, right], axis=1).astype("float32")
+        out = time_stretch(stereo, 0.8)
+        assert out.shape == (int(len(t) * 0.8), 2)
+        assert self._peak_hz(out[:, 0], rate) == pytest.approx(300.0, abs=3.0)
+        assert self._peak_hz(out[:, 1], rate) == pytest.approx(500.0, abs=3.0)
+
+    def test_it_refuses_to_go_further_than_it_can_convince(self):
+        from midimusic.audio.timestretch import MAX_STRETCH, MIN_STRETCH, time_stretch
+
+        tone, _rate = self._tone(seconds=1.0)
+        # Past roughly half or double, a phase vocoder stops sounding like the
+        # same performance. Clamping beats delivering mush.
+        assert len(time_stretch(tone, 8.0)) == int(round(len(tone) * MAX_STRETCH))
+        assert len(time_stretch(tone, 0.05)) == int(round(len(tone) * MIN_STRETCH))
+
+    def test_nothing_to_do_is_left_alone(self):
+        from midimusic.audio.timestretch import time_stretch
+
+        tone, _rate = self._tone(seconds=0.5)
+        assert time_stretch(tone, 1.0) is tone
+        assert time_stretch(np.zeros(0, dtype="float32"), 0.5).size == 0
+
+    def test_the_pitch_content_of_real_material_is_unchanged(self):
+        from midimusic.audio.analyze import estimate_key
+        from midimusic.audio.synth_fallback import render_song_fallback
+        from midimusic.audio.timestretch import time_stretch
+        from midimusic.theory.composer import compose
+
+        song = compose("synthwave", "F# minor", tempo=96.0, duration_seconds=12,
+                       seed=11, complexity=0.6)
+        buffer = render_song_fallback(song, sample_rate=22050)
+        mono = np.asarray(buffer.samples).mean(axis=1)
+        before = estimate_key(mono, buffer.sample_rate)
+
+        # 96 to 128 bpm, the change that turns a slow record into a dance one.
+        after = estimate_key(time_stretch(mono, 96.0 / 128.0), buffer.sample_rate)
+        assert after[0] == before[0], (before[0], after[0])
+        assert float(np.corrcoef(before[2], after[2])[0, 1]) > 0.97

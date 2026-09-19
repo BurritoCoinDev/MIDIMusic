@@ -130,6 +130,43 @@ ACE-Step instead and you get their sound, but the panel says plainly that the
 backing will drift — and if the model's maximum length is shorter than your
 song, it says how many times the backing has to loop to cover it.
 
+### Changing genre, not just the backing
+
+Genre is partly tempo. A slow record with house drums under it is a slow record
+with house drums under it — so the Remix tab can move the tempo, and everything
+you keep moves with it.
+
+Set a target and the kept layers are **time-stretched**, not resampled: the
+length changes and the pitch does not, so what you kept stays in the same key
+as the backing written to go under it. That is a phase vocoder in numpy, with
+the bins locked to their spectral peaks — without that locking the output loses
+several dB and sounds underwater.
+
+It holds up to about half or double. Past that a phase vocoder stops sounding
+like the same performance, so an impossible ask is met with the nearest tempo
+that still works, and the result records both numbers.
+
+Worked example — **an instrumental, taken from 96 bpm to 128**:
+
+| | |
+|---|---|
+| Keep | `other` (the synths and guitars — the tune) |
+| Replace | drums, bass |
+| Prompt | *four-to-the-floor EDM, driving synth bass, side-chained pads* |
+| Tempo | 128 |
+
+which gives: source measured at 95.7 bpm in F# minor, kept layer re-timed to
+128 with its pitch and key intact, a new rhythm section written at 128 in F#
+minor, mixed and levelled. Thirty-two seconds of audio took thirty-two seconds
+on a CPU.
+
+Note what is being kept there. On a song you keep the vocal, because that is
+the one layer a model cannot replace. On an instrumental there is no vocal, so
+keep the layer carrying the tune instead — otherwise you are not remixing
+anything, you are generating a new track that happens to share a key. An
+instrumental still produces a vocals stem, and it will be silence; the result
+says so rather than letting you think you kept something.
+
 Tick **save the parts** to get the kept layers and the new backing as separate
 files, so you can balance the mix yourself.
 

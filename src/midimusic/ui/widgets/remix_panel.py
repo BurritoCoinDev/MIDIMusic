@@ -41,9 +41,10 @@ class RemixPanel(QtWidgets.QWidget):
         layout.addWidget(title)
 
         blurb = QtWidgets.QLabel(
-            "Keep the parts of a recording worth keeping — usually the vocal, "
-            "because it is the one layer a model cannot convincingly replace — "
-            "and describe the backing you want written underneath it."
+            "Keep the parts of a recording worth keeping — the vocal on a song, "
+            "or the synths and guitars on an instrumental — and describe the "
+            "backing you want written underneath them. Move the tempo as well "
+            "and you have changed what genre it is."
         )
         blurb.setProperty("role", "dim")
         blurb.setWordWrap(True)
@@ -130,6 +131,19 @@ class RemixPanel(QtWidgets.QWidget):
         self.bed_note.setProperty("role", "dim")
         self.bed_note.setWordWrap(True)
         form.addRow("", self.bed_note)
+
+        self.tempo = QtWidgets.QSpinBox()
+        self.tempo.setRange(0, 200)
+        self.tempo.setSingleStep(2)
+        self.tempo.setSuffix(" bpm")
+        self.tempo.setSpecialValueText("Keep the original")
+        self.tempo.valueChanged.connect(self._update_state)
+        form.addRow("Tempo", self.tempo)
+
+        self.tempo_note = QtWidgets.QLabel("")
+        self.tempo_note.setProperty("role", "dim")
+        self.tempo_note.setWordWrap(True)
+        form.addRow("", self.tempo_note)
 
         self.limit = QtWidgets.QSpinBox()
         self.limit.setRange(0, 3600)
@@ -303,6 +317,28 @@ class RemixPanel(QtWidgets.QWidget):
             if missing_bed:
                 warnings.append(f"{bed_entry.name} needs: {', '.join(missing_bed)}.")
 
+        if self.tempo.value():
+            self.tempo_note.setText(
+                f"The layers you keep are re-timed to {self.tempo.value()} bpm without "
+                "changing their pitch, and the new backing is written at that tempo. "
+                "Genre is partly tempo: most house and techno sits around 120-130, "
+                "drum and bass nearer 174."
+            )
+            # A phase vocoder holds up over a moderate change and smears past
+            # one, so an impossible ask is met with the nearest tempo that
+            # still sounds like the same performance.
+            warnings.append(
+                "A large tempo change smears transients. Anything beyond half or "
+                "double the original is pulled back to what re-timing can do "
+                "convincingly."
+            )
+        else:
+            self.tempo_note.setText(
+                "The backing is written at whatever tempo the recording turns out to "
+                "be. Set a tempo to move the whole thing, which is usually what "
+                "changing genre needs."
+            )
+
         self.warning.setText("  ".join(warnings))
         self.warning.setVisible(bool(warnings))
 
@@ -343,6 +379,7 @@ class RemixPanel(QtWidgets.QWidget):
                 "separator": self.separator.currentData() or "demucs-htdemucs",
                 "bed_model": self.bed.currentData() or DEFAULT_BED_MODEL,
                 "keep_stems": self.keep_stems(),
+                "target_tempo": float(self.tempo.value()),
                 "save_stems": self.save_stems.isChecked(),
                 "max_seconds": float(self.limit.value()),
                 "sample_rate": self.service.settings.sample_rate,

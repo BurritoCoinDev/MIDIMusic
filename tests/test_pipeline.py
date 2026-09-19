@@ -585,7 +585,7 @@ class TestRemix:
     """Keeping one layer of a recording and generating the rest."""
 
     @staticmethod
-    def _fake_separation(monkeypatch, rate=22050, seconds=6.0):
+    def _fake_separation(monkeypatch, rate=22050, seconds=6.0, silent=()):
         """Stand in for Demucs, so the mix path can be tested without it."""
         import os
         from types import SimpleNamespace
@@ -605,6 +605,7 @@ class TestRemix:
             t = np.arange(int(rate * seconds)) / rate
             written = {}
             for index, (name, gain) in enumerate(levels.items()):
+                gain = 0.0 if name in silent else gain
                 wave = (np.sin(2 * np.pi * (110 * (index + 1)) * t) * gain).astype("float32")
                 path = os.path.join(folder, f"{name}.wav")
                 sf.write(path, np.stack([wave, wave], axis=1), rate, subtype="FLOAT")
@@ -804,6 +805,83 @@ class TestRemix:
 
         leftovers = [p for p in out_dir.rglob("*") if p.is_file()]
         assert leftovers == [], leftovers
+
+    def test_a_target_tempo_retimes_what_is_kept(self, monkeypatch, tmp_path):
+        self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        source = self._source(tmp_path)
+
+        at_source = remix.generate(self._request(source, tmp_path), GeneratorContext())
+        faster = remix.generate(
+            self._request(source, tmp_path, target_tempo=160.0), GeneratorContext()
+        )
+
+        # Genre is partly tempo. Without this the backing is house-styled at
+        # whatever pace the record happened to be, which is not a genre change.
+        assert faster.meta["tempo"] == 160.0
+        assert faster.meta["source_tempo"] == at_source.meta["tempo"]
+        assert faster.meta["time_stretched"] is True
+        assert at_source.meta["time_stretched"] is False
+
+        ratio = faster.audio.duration_seconds / at_source.audio.duration_seconds
+        expected = at_source.meta["tempo"] / 160.0
+        assert ratio == pytest.approx(expected, rel=0.05), (ratio, expected)
+
+    def test_the_backing_follows_the_target_tempo_not_the_source(
+        self, monkeypatch, tmp_path
+    ):
+        from midimusic.generators.builtin import BuiltinComposerGenerator
+
+        self._fake_separation(monkeypatch)
+        seen: list = []
+        original = BuiltinComposerGenerator.generate
+
+        def spy(self, request, ctx):
+            seen.append(request)
+            return original(self, request, ctx)
+
+        monkeypatch.setattr(BuiltinComposerGenerator, "generate", spy)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        result = remix.generate(
+            self._request(self._source(tmp_path), tmp_path, target_tempo=150.0),
+            GeneratorContext(),
+        )
+        # Re-timing the kept layers to 150 and then writing the backing at the
+        # original tempo would put the two against each other.
+        assert seen and seen[0].tempo == pytest.approx(150.0)
+        assert "150 bpm" in seen[0].prompt
+        assert result.meta["beat_locked"] is True
+
+    def test_a_silent_kept_layer_is_reported(self, monkeypatch, tmp_path):
+        self._fake_separation(monkeypatch, silent=("vocals",))
+        remix = create_generator(load_catalog().get("stem-remix"))
+        result = remix.generate(
+            self._request(self._source(tmp_path), tmp_path), GeneratorContext()
+        )
+        # An instrumental still produces a vocals stem, so keeping it looks
+        # like keeping something when it is silence.
+        assert result.meta["silent_kept"] == ["vocals"]
+
+    def test_an_impossible_tempo_change_is_pulled_back(self):
+        from midimusic.core.remix import _target_tempo
+
+        # A phase vocoder past half or double stops sounding like the same
+        # performance, so the ask is met with the nearest tempo that does.
+        assert _target_tempo(240.0, 96.0) == 192.0
+        assert _target_tempo(30.0, 96.0) == 48.0
+        assert _target_tempo(128.0, 96.0) == 128.0
+        # Nothing worth doing, so nothing is done.
+        assert _target_tempo(96.2, 96.0) == 0.0
+        assert _target_tempo(None, 96.0) == 0.0
+        assert _target_tempo("nonsense", 96.0) == 0.0
+
+    def test_the_prompt_names_the_tempo_the_backing_must_hit(self):
+        from midimusic.audio.analyze import AudioAnalysis
+        from midimusic.core.remix import condition_prompt
+
+        analysis = AudioAnalysis(tempo=96.0, key="F# minor")
+        assert condition_prompt("EDM", analysis) == "EDM, 96 bpm, in F# minor"
+        assert condition_prompt("EDM", analysis, 128.0) == "EDM, 128 bpm, in F# minor"
 
     def test_the_prompt_carries_the_tempo_and_key(self):
         from midimusic.audio.analyze import AudioAnalysis
