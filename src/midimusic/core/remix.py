@@ -274,6 +274,11 @@ class RemixGenerator(Generator):
                 # puts the kept layer in a different key from the backing --
                 # so the length changes and the frequencies do not.
                 kept = [time_stretch(layer, plan.stretch) for layer in kept]
+                if not kept:
+                    # Nothing was kept, so nothing was re-timed -- the backing
+                    # is simply written at the new tempo. Reporting a stretch
+                    # here would be claiming work that did not happen.
+                    plan.stretch = 1.0
                 frames = max((layer.shape[0] for layer in kept), default=frames)
                 plan.beat_offset *= plan.stretch
 

@@ -852,6 +852,19 @@ class TestRemix:
         assert "150 bpm" in seen[0].prompt
         assert result.meta["beat_locked"] is True
 
+    def test_keeping_nothing_reports_no_stretch(self, monkeypatch, tmp_path):
+        self._fake_separation(monkeypatch)
+        remix = create_generator(load_catalog().get("stem-remix"))
+        result = remix.generate(
+            self._request(self._source(tmp_path), tmp_path,
+                          keep_stems=[], target_tempo=150.0),
+            GeneratorContext(),
+        )
+        # The backing is written at the new tempo, but with nothing kept there
+        # was nothing to re-time. Saying otherwise claims work not done.
+        assert result.meta["tempo"] == 150.0
+        assert result.meta["time_stretched"] is False
+
     def test_a_silent_kept_layer_is_reported(self, monkeypatch, tmp_path):
         self._fake_separation(monkeypatch, silent=("vocals",))
         remix = create_generator(load_catalog().get("stem-remix"))
