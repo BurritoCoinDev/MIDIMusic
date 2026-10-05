@@ -211,10 +211,24 @@ weights are non-commercial. Stable Audio's licence has a revenue ceiling.
 DiffRhythm badges Apache-2.0 on the generator while requiring a VAE under a
 different licence entirely.
 
-Two models are deliberately **not** included, with reasons recorded in the
-catalog: YuE (FlashAttention-2 is load-bearing for memory and has no practical
-Windows build) and MiniMax Music 3 (its licence requires displaying MiniMax
-branding in your product's UI).
+One model is deliberately **not** included, with its reason recorded in the
+catalog: YuE, because FlashAttention-2 is load-bearing for its memory use and
+has no practical Windows build.
+
+**MiniMax Music 3** is included, and is the one to reach for when you want a
+finished-sounding song rather than a correct one: vocals, arrangement and
+production in a single pass, up to five minutes. It is also the heaviest thing
+here by a distance — 57 GB on disk, about 22 GB of video memory — and MiniMax
+state that inference requires CUDA, so the ROCm path is offered but untested.
+
+Its licence is worth reading rather than skimming. The grant is MIT-shaped,
+and the one real condition is under "Commercial Terms": a *commercial* product
+or service using it must display "MiniMax-Music3" in its interface. This app
+is neither commercial nor hiding it — the model's name is on its card.
+
+What it will not do is take your recording as input. It is text-to-music only,
+so it cannot be the engine behind the Remix tab's core trick; it can only write
+the new backing, and it steers to a tempo rather than holding one.
 
 ---
 

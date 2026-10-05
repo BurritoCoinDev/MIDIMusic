@@ -247,6 +247,99 @@ def _coerce(output, default_rate: int):
     return samples, rate
 
 
+def run_minimax_music3(req: dict) -> dict:
+    """MiniMax Music 3: a whole song, vocals and all, in one pass.
+
+    Not a small thing to run. The checkpoint is 57 GB on disk and the pipeline
+    is an 8B text encoder in front of an 11B music model, so it leans on
+    diffusers' component manager to keep only what it is using on the card.
+
+    MiniMax state that inference requires CUDA. A ROCm build of torch answers
+    to the same API, so this does not refuse to try on AMD -- but that path is
+    untested and the catalog says so.
+    """
+    import torch
+    from diffusers import ComponentsManager, ModularPipeline
+
+    repo = req.get("repo") or "MiniMaxAI/MiniMax-Music3"
+    device = _resolve_device(req.get("device", "auto"))
+    if device == "cpu":
+        raise RuntimeError(
+            "MiniMax Music 3 needs a GPU. On a processor alone a single song "
+            "would take many hours."
+        )
+
+    progress(0.03, f"Loading {repo} -- the first run reads 57 GB", "load")
+    manager = ComponentsManager()
+    manager.enable_auto_cpu_offload(device=device)
+
+    load_kwargs = {"components_manager": manager}
+    if req.get("cache_dir"):
+        load_kwargs["cache_dir"] = req["cache_dir"]
+    if req.get("token"):
+        load_kwargs["token"] = req["token"]
+    if req.get("offline"):
+        load_kwargs["local_files_only"] = True
+    try:
+        pipe = ModularPipeline.from_pretrained(repo, **load_kwargs)
+    except TypeError:
+        # Older signatures take fewer keywords; the component manager is the
+        # only one that matters for fitting on the card.
+        pipe = ModularPipeline.from_pretrained(repo, components_manager=manager)
+
+    progress(0.10, "Loading components", "load")
+    pipe.load_components(dtype=torch.bfloat16)
+
+    # Below roughly 22 GB the language model has to be streamed a layer at a
+    # time. Slower, but the difference between running and not running.
+    vram = float(req.get("vram_gb") or 0.0)
+    if 0 < vram < 22.0:
+        progress(0.14, f"{vram:.0f} GB card: streaming the language model", "load")
+        try:
+            from diffusers.hooks import apply_group_offloading
+
+            apply_group_offloading(
+                pipe.language_model, onload_device=torch.device(device),
+                offload_type="leaf_level", use_stream=True,
+            )
+        except Exception as exc:  # pragma: no cover - depends on the installed build
+            progress(0.14, f"Could not stream the language model: {exc}", "load")
+
+    lyrics = (req.get("lyrics") or "").strip()
+    if req.get("instrumental", True):
+        lyrics = ""
+
+    seconds = min(float(req.get("duration", 60.0)), float(req.get("max_duration", 300.0)))
+    generator = torch.Generator(device)
+    if req.get("seed") is not None:
+        generator.manual_seed(int(req["seed"]))
+
+    progress(0.2, f"Generating {seconds:.0f}s", "generate")
+    params = {
+        "prompt": req.get("prompt") or "instrumental music",
+        "audio_duration": seconds,
+        "generator": generator,
+        "output": "audios",
+    }
+    if lyrics:
+        params["lyrics"] = lyrics
+    if req.get("negative_prompt"):
+        params["negative_prompt"] = req["negative_prompt"]
+
+    try:
+        audio = pipe(**params)[0]
+    except TypeError:
+        # Drop the optional arguments rather than failing outright if this
+        # build of the pipeline does not take them.
+        audio = pipe(prompt=params["prompt"], audio_duration=seconds,
+                     generator=generator, output="audios")[0]
+
+    rate = int(getattr(pipe, "sampling_rate", req.get("sample_rate", 44100)))
+    _write_wav(req["output_path"], audio.T.float().cpu().numpy(), rate)
+    return {"sample_rate": rate, "device": device, "model": repo,
+            "vocals": bool(lyrics)}
+
+
 def run_separate(req: dict) -> dict:
     """Split a recording into stems with Demucs.
 
@@ -547,8 +640,8 @@ def run_probe(_req: dict) -> dict:
         info["torch_error"] = f"{type(exc).__name__}: {exc}"
         info["usable"] = False
 
-    for module in ("transformers", "diffusers", "acestep", "demucs", "mt3_infer",
-                   "soundfile", "numpy"):
+    for module in ("transformers", "diffusers", "accelerate", "acestep", "demucs",
+                   "mt3_infer", "soundfile", "numpy"):
         try:
             __import__(module)
             info[module] = True
@@ -573,6 +666,7 @@ BACKENDS = {
     "hf-musicgen": run_musicgen,
     "diffusers-audio": run_stable_audio,
     "ace-step": run_ace_step,
+    "minimax-music3": run_minimax_music3,
 }
 
 

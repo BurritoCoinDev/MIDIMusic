@@ -109,6 +109,40 @@
       "notes": "Pin the revision: older ONNX exports are incompatible with current code. CPU-only by design, and still autoregressive, so long pieces take a while."
     },
     {
+      "id": "minimax-music3",
+      "name": "MiniMax Music 3",
+      "kind": "audio",
+      "adapter": "minimax-music3",
+      "repo": "MiniMaxAI/MiniMax-Music3",
+      "license": "MiniMax-Music3 Community License",
+      "license_note": "Free to use, modify and redistribute. A commercial product or service using it must display \"MiniMax-Music3\" in its interface, and over $20M a year in revenue needs written permission from MiniMax.",
+      "commercial_use": "conditional",
+      "size_gb": 57.4,
+      "vram_gb": 22.0,
+      "devices": [
+        "cuda",
+        "rocm"
+      ],
+      "tier": 0,
+      "flagship": true,
+      "experimental": true,
+      "outputs": [
+        "flac",
+        "wav"
+      ],
+      "vocals": true,
+      "lyrics": true,
+      "sample_rate": 44100,
+      "max_duration": 300,
+      "extras": [
+        "diffusers>=0.40.0",
+        "transformers",
+        "accelerate"
+      ],
+      "description": "A complete song in one pass -- vocals, arrangement and production -- up to five minutes, from a description and your lyrics.",
+      "notes": "57 GB on disk and about 22 GB of video memory with components moved on and off the card; below that the language model is streamed a layer at a time, which works but is slow. MiniMax state that inference requires CUDA: a ROCm build answers the same API so this does not refuse to try on AMD, but that path is untested. Tempo and key in the description steer it rather than binding it, so it is the wrong choice where a backing has to stay locked to something."
+    },
+    {
       "id": "ace-step-1.5",
       "name": "ACE-Step 1.5",
       "kind": "audio",
@@ -441,11 +475,6 @@
       "id": "yue",
       "name": "YuE",
       "reason": "FlashAttention-2 is load-bearing for memory, not just speed, and there is no practical Windows build. Around 360s of compute per 30s of audio even on a 4090."
-    },
-    {
-      "id": "minimax-music-3",
-      "name": "MiniMax Music 3",
-      "reason": "Licence requires displaying MiniMax branding in the product UI, and there is no ROCm-on-Windows serving path. Revisit if that changes."
     }
   ]
 }

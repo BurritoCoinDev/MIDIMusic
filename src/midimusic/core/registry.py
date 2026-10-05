@@ -34,6 +34,7 @@ ADAPTERS: dict[str, str] = {
     "ace-step": "midimusic.generators.remote:RemoteAudioGenerator",
     "diffusers-audio": "midimusic.generators.remote:RemoteAudioGenerator",
     "diffrhythm": "midimusic.generators.remote:RemoteAudioGenerator",
+    "minimax-music3": "midimusic.generators.remote:RemoteAudioGenerator",
     "hf-text2midi": "midimusic.generators.symbolic_hf:Text2MidiGenerator",
     "hf-anticipatory": "midimusic.generators.symbolic_hf:AnticipatoryGenerator",
     "onnx-midi": "midimusic.generators.symbolic_onnx:OnnxMidiGenerator",

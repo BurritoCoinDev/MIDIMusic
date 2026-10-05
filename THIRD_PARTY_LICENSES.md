@@ -59,6 +59,7 @@ of the application bundle.
 | ONNX Runtime | MIT |
 | Demucs | MIT |
 | mt3-infer | MIT |
+| accelerate | Apache-2.0 |
 
 ### A note on mt3-infer
 
@@ -81,6 +82,7 @@ begins.
 | Anticipatory Music Transformer | Apache-2.0 | Yes (trained on Lakh MIDI, CC-BY 4.0) |
 | MIDI Composer (skytnt) | Apache-2.0 | Yes |
 | MusicGen | **CC-BY-NC-4.0** | **No** — non-commercial only |
+| MiniMax Music 3 | MiniMax-Music3 Community License | Conditional — a commercial product must display "MiniMax-Music3" in its UI; over $20M/year needs written permission |
 | YourMT3+ (orchestral score) | Apache-2.0 | Yes |
 | Demucs `htdemucs` / `htdemucs_6s` | MIT | Yes |
 | Stable Audio Open | Stability Community Licence | Conditional, below a revenue threshold |

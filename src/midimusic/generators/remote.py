@@ -38,6 +38,7 @@ _COMMANDS = {
     "diffusers-audio": "diffusers-audio",
     "ace-step": "ace-step",
     "diffrhythm": "diffusers-audio",
+    "minimax-music3": "minimax-music3",
 }
 
 # What each backend needs present in the runtime before it can work.
@@ -45,6 +46,7 @@ _REQUIREMENTS = {
     "hf-musicgen": ("torch", "transformers"),
     "diffusers-audio": ("torch", "diffusers"),
     "ace-step": ("torch", "acestep"),
+    "minimax-music3": ("torch", "diffusers", "transformers", "accelerate"),
 }
 
 
@@ -110,6 +112,10 @@ class RemoteAudioGenerator(Generator):
             return max(20.0, seconds * (0.35 if on_gpu else 5.0))
         if adapter == "hf-musicgen":
             return max(5.0, seconds * (1.5 if on_gpu else 25.0))
+        if adapter == "minimax-music3":
+            # An 8B encoder in front of an 11B model, with components moving
+            # on and off the card, plus a long first load from 57 GB on disk.
+            return max(120.0, 90.0 + seconds * (2.5 if on_gpu else 600.0))
         steps = int(request.extra.get("steps", 100))
         return max(10.0, steps * (0.2 if on_gpu else 3.0))
 
@@ -141,6 +147,13 @@ class RemoteAudioGenerator(Generator):
                 "token": ctx.hf_token,
                 "offline": ctx.offline,
                 "models_dir": str(ctx.models_dir) if ctx.models_dir else "",
+                # Where the downloader put the weights, so the worker reads
+                # what the Models tab fetched rather than pulling them again
+                # into a second cache.
+                "cache_dir": str(ctx.models_dir / "hub") if ctx.models_dir else "",
+                # How much the card has, so a pipeline that can trade speed
+                # for memory knows whether it needs to.
+                "vram_gb": float(self.probe().get("vram_gb") or 0.0),
                 "env": dict(getattr(entry, "env", None) or {}),
             }
             payload = {k: v for k, v in payload.items() if v is not None}

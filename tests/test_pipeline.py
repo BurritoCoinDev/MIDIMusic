@@ -907,6 +907,66 @@ class TestRemix:
         assert condition_prompt("", None) == "instrumental backing"
 
 
+class TestMiniMaxMusic3:
+    """The heaviest backend in the catalog, and the only conditional licence."""
+
+    def _entry(self):
+        entry = load_catalog().get("minimax-music3")
+        assert entry is not None, "the model is not in the catalog"
+        return entry
+
+    def test_it_resolves_to_a_worker_backed_generator(self):
+        entry = self._entry()
+        generator = create_generator(entry)
+        assert generator is not None
+        # It runs out of process like every other torch backend, so a crash
+        # inside it costs one job rather than the session.
+        assert generator.__class__.__name__ == "RemoteAudioGenerator"
+        assert generator.capabilities().supports_vocals
+        assert generator.capabilities().supports_lyrics
+
+    def test_the_worker_knows_the_command(self):
+        import importlib.util
+
+        from midimusic.generators.remote import _COMMANDS
+
+        command = _COMMANDS[self._entry().adapter]
+        spec = importlib.util.spec_from_file_location(
+            "runner", Path(__file__).resolve().parents[1]
+            / "src" / "midimusic" / "worker" / "runner.py"
+        )
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        assert command in runner.BACKENDS
+
+    def test_the_licence_condition_is_surfaced_before_a_download(self):
+        entry = self._entry()
+        warning = entry.license_warning()
+        # The grant is MIT-shaped, but there is a real condition on commercial
+        # use and the user should see it before committing to 57 GB.
+        assert entry.commercial_use == "conditional"
+        assert "MiniMax-Music3" in warning
+        assert "commercial" in warning.lower()
+
+    def test_a_card_that_cannot_run_it_does_not_offer_it(self):
+        catalog = load_catalog()
+        small = {m.id for m in catalog.available("cuda", 8.0)}
+        large = {m.id for m in catalog.available("cuda", 24.0)}
+        assert "minimax-music3" not in small
+        assert "minimax-music3" in large
+
+    def test_it_is_marked_as_the_heavy_experimental_option(self):
+        entry = self._entry()
+        assert entry.experimental, "the ROCm path is untested and must say so"
+        assert entry.size_gb > 50
+        assert entry.vram_gb >= 22
+        assert "untested" in entry.notes.lower()
+
+    def test_it_is_no_longer_recorded_as_dropped(self):
+        # It was excluded on a licence reading that turned out to be wrong.
+        assert "minimax-music-3" not in {d["id"] for d in load_catalog().dropped}
+
+
 class TestModelPackages:
     def test_separation_works_after_one_runtime_install(self):
         from midimusic.core.runtime import BASE_PACKAGES

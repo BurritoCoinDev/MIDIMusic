@@ -192,10 +192,17 @@ False on Windows and is checked before any use.
 false-positive trigger, and puts Qt's DLLs somewhere a user cannot replace
 them.
 
-**YuE and MiniMax Music 3.** Recorded in the catalog's `dropped` list with
-reasons: FlashAttention-2 is load-bearing for YuE's memory use and has no
-practical Windows build; MiniMax's licence requires displaying its branding in
-your product's UI.
+**YuE.** Recorded in the catalog's `dropped` list with its reason:
+FlashAttention-2 is load-bearing for its memory use, not just its speed, and
+has no practical Windows build.
+
+MiniMax Music 3 was in that list too, on the grounds that its licence demanded
+branding in the product UI. That was wrong, and worth recording as a lesson
+about assessing a licence from coverage of it rather than from the text. The
+condition sits under "Commercial Terms" and binds a *commercial product or
+service*; the grant itself is MIT-shaped. The weights were published after
+that note was written, the pipeline is in diffusers as of 0.40.0, and the
+model is now in the catalog.
 
 ---
 
