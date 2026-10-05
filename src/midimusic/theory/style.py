@@ -218,6 +218,25 @@ STYLES: dict[str, Style] = {
                   "arp": GM["square_lead"], "counter": GM["synth_strings"]},
         description="Four-on-the-floor, offbeat stabs."),
 
+    "trance": _st("trance", extensions=True, tempo=(134, 140),
+        scales=("minor", "harmonic_minor", "dorian"),
+        # The trance cadence is i-bVI-bIII-bVII and its rotations: all
+        # diatonic to the natural minor, all rising, none of them resolving in
+        # a hurry. That refusal to settle is what makes eight bars feel like
+        # they are going somewhere.
+        progressions=(("i", "bVI", "bIII", "bVII"), ("i", "bVII", "bVI", "bVII"),
+                      ("bVI", "bVII", "i", "i"), ("i", "bVI", "bVII", "i")),
+        # Four-on-the-floor underneath, bass on the off-beats between the
+        # kicks, chords stabbing with it. The arp and pad roles carry the
+        # sixteenths and the long supersaw on top of that.
+        drums="house", bass="house", comp="offbeat", form="electronic",
+        sevenths=False, humanize=0.05,
+        programs={"bass": GM["synth_bass2"], "chords": GM["saw_lead"],
+                  "lead": GM["saw_lead"], "pad": GM["sweep_pad"],
+                  "arp": GM["square_lead"], "counter": GM["poly_pad"]},
+        melody_density=0.45, melody_leapiness=0.25,
+        description="Off-beat bass, long supersaw pads and sixteenth arpeggios."),
+
     "techno": _st("techno", tempo=(128, 140), scales=("minor", "phrygian", "locrian"),
         progressions=(("i", "i", "bVI", "bVII"), ("i", "i", "i", "i")),
         drums="techno", bass="driving", comp="stabs", form="electronic",

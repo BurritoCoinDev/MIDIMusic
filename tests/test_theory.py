@@ -241,3 +241,54 @@ class TestOrchestralSections:
 
         assert sort_key("Woodwinds") < sort_key("Brass") < sort_key("Percussion")
         assert sort_key("Percussion") < sort_key("Strings")
+
+
+class TestTranceStyle:
+    """Trance, which used to fall through the parser and come out as pop."""
+
+    def test_the_word_reaches_the_right_style(self):
+        from midimusic.prompt.parser import parse_prompt
+
+        # Asking for trance and being handed pop is worse than being refused:
+        # nothing says it happened, and the output is simply the wrong genre.
+        for text in ("trance", "trance EDM mix", "uplifting trance",
+                     "progressive trance", "psytrance", "euphoric anthem"):
+            assert parse_prompt(text).style == "trance", text
+
+    def test_it_is_not_just_house_with_another_name(self):
+        from midimusic.theory.style import get_style
+
+        trance, house = get_style("trance"), get_style("house")
+        # Faster, tighter, and minor-led -- the things that make it audibly a
+        # different genre rather than a relabelled one.
+        assert trance.tempo[0] > house.tempo[0]
+        assert trance.humanize < house.humanize
+        assert trance.scales[0] == "minor"
+
+    def test_the_progressions_are_the_trance_cadence(self):
+        from midimusic.theory.style import get_style
+
+        # i-bVI-bIII-bWII and its rotations: diatonic to the natural minor,
+        # rising, and in no hurry to resolve.
+        progressions = get_style("trance").progressions
+        assert ("i", "bVI", "bIII", "bVII") in progressions
+        assert all(p[0].islower() or p[0].startswith("b") for p in progressions)
+
+    def test_it_arranges_without_falling_over(self):
+        from midimusic.theory.composer import compose
+
+        song = compose("trance", "A minor", duration_seconds=20, seed=4,
+                       complexity=0.85)
+        assert song.note_count > 50
+        names = {t.name for t in song.non_empty_tracks()}
+        assert "Drums" in names
+        assert song.tracks, "no parts were arranged"
+
+    def test_a_remix_prompt_picks_it_over_house(self):
+        from midimusic.core.models import GenerationRequest
+        from midimusic.generators.builtin import build_spec
+
+        # "trance EDM mix" contains "EDM", which maps to house on its own.
+        # The more specific word has to win.
+        spec = build_spec(GenerationRequest(prompt="trance EDM mix", seed=1))
+        assert spec.style.name == "trance"

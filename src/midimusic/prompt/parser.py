@@ -19,6 +19,9 @@ __all__ = ["MOOD_TERMS", "STYLE_SYNONYMS", "ParsedPrompt", "parse_prompt"]
 STYLE_SYNONYMS: dict[str, str] = {
     "edm": "house", "dance": "house", "deep house": "house", "club": "house",
     "electro": "techno", "industrial": "techno", "minimal": "techno",
+    "uplifting trance": "trance", "progressive trance": "trance",
+    "psytrance": "trance", "psy trance": "trance", "goa": "trance",
+    "euphoric": "trance", "anthem": "trance",
     "drum and bass": "dnb", "drum n bass": "dnb", "jungle": "dnb",
     "breakbeat": "dnb", "liquid": "dnb",
     "hip hop": "hiphop", "hip-hop": "hiphop", "rap": "hiphop", "boom bap": "hiphop",
