@@ -61,6 +61,15 @@ DEFAULT_KEEP: tuple[str, ...] = ("vocals",)
 # vocal rather than drifting away from it.
 DEFAULT_BED_MODEL = "builtin-composer"
 
+# How far below the layers it plays under the new backing may sit. Matching
+# the stems it replaced is the right rule for a song -- a rhythm section
+# swapped for a rhythm section -- and useless for an orchestral cue, where
+# separation leaves almost everything in one stem and the drums and bass
+# tracks are bleed. Matched to those, the beat lands around 9 dB under the
+# orchestra and simply is not there. The new part has to be audible or there
+# was no point generating it.
+AUDIBILITY_FLOOR_DB = 6.0
+
 
 @dataclass
 class RemixPlan:
@@ -72,6 +81,7 @@ class RemixPlan:
     drifts: bool = False
     beat_offset: float = 0.0
     source_tempo: float = 0.0
+    backing_db: float = 0.0
     tempo: float = 0.0
     stretch: float = 1.0
     silent_kept: list[str] = field(default_factory=list)
@@ -294,6 +304,9 @@ class RemixGenerator(Generator):
             bed = dsp.match_loudness(bed, reference, rate)
 
             layers = [dsp.to_stereo(layer)[:frames] for layer in kept]
+            bed, plan.backing_db = _balance(
+                bed, layers, rate, float(request.extra.get("backing_db") or 0.0)
+            )
             mixed, gain = dsp.mix_layers([*layers, bed[:frames]])
             buffer = AudioBuffer(mixed, rate)
 
@@ -325,6 +338,7 @@ class RemixGenerator(Generator):
                 "source_tempo": plan.source_tempo,
                 "time_stretched": plan.stretch != 1.0,
                 "silent_kept": plan.silent_kept,
+                "backing_db": round(plan.backing_db, 2),
                 "key": analysis.key,
                 "analysis": analysis.describe(),
             },
@@ -446,6 +460,27 @@ class RemixGenerator(Generator):
                 folder.rmdir()
             raise
         return written
+
+
+def _balance(bed: np.ndarray, kept: list[np.ndarray], rate: int,
+             offset_db: float = 0.0) -> tuple[np.ndarray, float]:
+    """Make sure the new backing can be heard, then apply the user's offset.
+
+    Returns the backing and the total adjustment in dB, so the result can
+    report how far it had to move rather than silently moving it.
+    """
+    total = float(offset_db)
+    if kept:
+        under = dsp.mix(list(kept))
+        here = dsp.measure(bed, rate)
+        there = dsp.measure(under, rate)
+        if np.isfinite(here.get("lufs", -np.inf)) and np.isfinite(there.get("lufs", -np.inf)):
+            shortfall = (there["lufs"] - AUDIBILITY_FLOOR_DB) - here["lufs"]
+            if shortfall > 0:
+                total += shortfall
+    if abs(total) < 0.1:
+        return bed, 0.0
+    return (bed * (10.0 ** (total / 20.0))).astype(np.float32), total
 
 
 def _unique_folder(parent: Path, name: str) -> Path:

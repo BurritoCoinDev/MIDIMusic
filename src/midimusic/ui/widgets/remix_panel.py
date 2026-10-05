@@ -145,6 +145,16 @@ class RemixPanel(QtWidgets.QWidget):
         self.tempo_note.setWordWrap(True)
         form.addRow("", self.tempo_note)
 
+        self.backing = QtWidgets.QComboBox()
+        for label, value in (("Balanced", 0.0), ("Subtle — sits behind", -6.0),
+                             ("Forward — the beat leads", 6.0)):
+            self.backing.addItem(label, value)
+        self.backing.setToolTip(
+            "How loud the new backing sits against the layers you kept. It is "
+            "never allowed to disappear underneath them whichever you pick."
+        )
+        form.addRow("Backing level", self.backing)
+
         self.limit = QtWidgets.QSpinBox()
         self.limit.setRange(0, 3600)
         self.limit.setSingleStep(30)
@@ -380,6 +390,7 @@ class RemixPanel(QtWidgets.QWidget):
                 "bed_model": self.bed.currentData() or DEFAULT_BED_MODEL,
                 "keep_stems": self.keep_stems(),
                 "target_tempo": float(self.tempo.value()),
+                "backing_db": float(self.backing.currentData() or 0.0),
                 "save_stems": self.save_stems.isChecked(),
                 "max_seconds": float(self.limit.value()),
                 "sample_rate": self.service.settings.sample_rate,

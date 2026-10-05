@@ -865,6 +865,51 @@ class TestRemix:
         assert result.meta["tempo"] == 150.0
         assert result.meta["time_stretched"] is False
 
+    def test_the_backing_is_never_buried_under_what_it_plays_with(self):
+        import numpy as np
+
+        from midimusic.audio.dsp import measure
+        from midimusic.core.remix import AUDIBILITY_FLOOR_DB, _balance
+
+        rate = 22050
+        t = np.arange(rate * 3) / rate
+        loud = np.stack([np.sin(2 * np.pi * 220 * t) * 0.5] * 2, axis=1).astype("float32")
+        faint = np.stack([np.sin(2 * np.pi * 440 * t) * 0.02] * 2, axis=1).astype("float32")
+
+        # Matching the stems it replaced is right for a song and useless for an
+        # orchestral cue, where separation leaves everything in one stem and
+        # the rhythm tracks are bleed. The backing would land far enough under
+        # the kept layer to be inaudible, which defeats remixing at all.
+        balanced, applied = _balance(faint, [loud], rate)
+        assert applied > 0
+        gap = measure(loud, rate)["lufs"] - measure(balanced, rate)["lufs"]
+        assert gap <= AUDIBILITY_FLOOR_DB + 0.5, gap
+
+    def test_a_backing_already_loud_enough_is_left_alone(self):
+        import numpy as np
+
+        from midimusic.core.remix import _balance
+
+        rate = 22050
+        t = np.arange(rate * 3) / rate
+        both = np.stack([np.sin(2 * np.pi * 220 * t) * 0.4] * 2, axis=1).astype("float32")
+        _balanced, applied = _balance(both, [both], rate)
+        assert applied == 0.0
+
+    def test_the_user_offset_is_applied_and_reported(self):
+        import numpy as np
+
+        from midimusic.audio.dsp import measure
+        from midimusic.core.remix import _balance
+
+        rate = 22050
+        t = np.arange(rate * 3) / rate
+        bed = np.stack([np.sin(2 * np.pi * 220 * t) * 0.3] * 2, axis=1).astype("float32")
+        louder, applied = _balance(bed, [], rate, offset_db=6.0)
+        assert applied == pytest.approx(6.0)
+        delta = measure(louder, rate)["rms_db"] - measure(bed, rate)["rms_db"]
+        assert delta == pytest.approx(6.0, abs=0.2)
+
     def test_a_silent_kept_layer_is_reported(self, monkeypatch, tmp_path):
         self._fake_separation(monkeypatch, silent=("vocals",))
         remix = create_generator(load_catalog().get("stem-remix"))
