@@ -519,16 +519,8 @@ def _result_audio(result: GenerationResult, generator: Generator,
         raise BackendUnavailable(
             f"{getattr(generator, 'name', 'The backing generator')} produced nothing to mix."
         )
-    if ctx.soundfont is not None:
-        try:
-            from ..audio.render import render_song
+    from ..audio.engine import render_audio
 
-            rendered = render_song(result.song, ctx.soundfont,
-                                   should_cancel=ctx.cancelled)
-            return np.asarray(rendered.samples, dtype=np.float32), rendered.sample_rate
-        except Exception:
-            log.exception("SoundFont render failed; using the built-in synth")
-    from ..audio.synth_fallback import render_song_fallback
-
-    rendered = render_song_fallback(result.song, should_cancel=ctx.cancelled)
+    rendered = render_audio(result.song, soundfont=ctx.soundfont,
+                            should_cancel=ctx.cancelled)
     return np.asarray(rendered.samples, dtype=np.float32), rendered.sample_rate

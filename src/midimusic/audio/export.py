@@ -175,14 +175,9 @@ def export_song(
     if fmt is OutputFormat.MIDI:
         return write_midi(song, path)
 
-    if soundfont is None:
-        from .synth_fallback import render_song_fallback
+    from .engine import render_audio
 
-        buf = render_song_fallback(song, progress=progress)
-    else:
-        from .render import render_song
-
-        buf = render_song(song, soundfont, progress=progress)
+    buf = render_audio(song, soundfont=soundfont, progress=progress)
 
     meta = metadata or TrackMetadata(
         title=song.title,

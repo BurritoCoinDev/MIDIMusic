@@ -223,23 +223,12 @@ class AppService:
         return written
 
     def _render(self, song: Song, job: Job) -> AudioBuffer:
-        soundfont = self.soundfont_path()
+        from ..audio.engine import render_audio
+
         job.context.report(0.7, "Rendering audio", "render")
-        if soundfont is not None:
-            try:
-                from ..audio.render import render_song
-
-                return render_song(
-                    song, soundfont,
-                    progress=lambda f: job.context.report(0.7 + 0.25 * f, "Rendering", "render"),
-                    should_cancel=job.context.cancelled,
-                )
-            except Exception:
-                log.exception("SoundFont render failed; falling back to built-in synth")
-        from ..audio.synth_fallback import render_song_fallback
-
-        return render_song_fallback(
+        return render_audio(
             song,
+            soundfont=self.soundfont_path(),
             sample_rate=self.settings.sample_rate,
             progress=lambda f: job.context.report(0.7 + 0.25 * f, "Rendering", "render"),
             should_cancel=job.context.cancelled,
